@@ -1,0 +1,97 @@
+\relax 
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction and Scope}{2}{section.1}\protected@file@percent }
+\newlabel{sec:intro}{{1}{2}{Introduction and Scope}{section.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Project Structure and Software Dependencies}{3}{section.2}\protected@file@percent }
+\newlabel{sec:structure}{{2}{3}{Project Structure and Software Dependencies}{section.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}Delivered Source Files}{3}{subsection.2.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Runtime Directory Hierarchy}{3}{subsection.2.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}Software Dependencies}{3}{subsection.2.3}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces Workspace directory variables defined in Section~2 and their runtime responsibilities.}}{4}{table.1}\protected@file@percent }
+\newlabel{tab:directories}{{1}{4}{Workspace directory variables defined in Section~2 and their runtime responsibilities}{table.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}Overall Implementation Workflow}{5}{section.3}\protected@file@percent }
+\newlabel{sec:workflow}{{3}{5}{Overall Implementation Workflow}{section.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {4}Input Data and Preparation}{6}{section.4}\protected@file@percent }
+\newlabel{sec:data}{{4}{6}{Input Data and Preparation}{section.4}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}CIFAR-10 Acquisition and Verification}{6}{subsection.4.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}CIFAR-10-C Archive Acquisition, Extraction, and Alignment}{6}{subsection.4.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Stratified Split Construction}{6}{subsection.4.3}\protected@file@percent }
+\newlabel{eq:xor_seed}{{1}{7}{Stratified Split Construction}{equation.1}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Main Components}{7}{section.5}\protected@file@percent }
+\newlabel{sec:components}{{5}{7}{Main Components}{section.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Filesystem, Hashing, and Cache Validation Helpers (Section~3)}{7}{subsection.5.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Dataset Wrappers (Sections~4 and 6)}{8}{subsection.5.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.3}Embedding and Logit Caching Layer (Sections~5--8)}{8}{subsection.5.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Model and Algorithm Implementation}{8}{section.6}\protected@file@percent }
+\newlabel{sec:algorithms}{{6}{8}{Model and Algorithm Implementation}{section.6}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.1}Zero-Shot CLIP Similarity Logits and Prompt Ensembling}{8}{subsection.6.1}\protected@file@percent }
+\newlabel{eq:img_norm}{{2}{8}{Zero-Shot CLIP Similarity Logits and Prompt Ensembling}{equation.2}{}}
+\newlabel{eq:txt_norm}{{3}{8}{Zero-Shot CLIP Similarity Logits and Prompt Ensembling}{equation.3}{}}
+\newlabel{eq:single_logits}{{4}{9}{Zero-Shot CLIP Similarity Logits and Prompt Ensembling}{equation.4}{}}
+\newlabel{eq:ensemble_logits}{{5}{9}{Zero-Shot CLIP Similarity Logits and Prompt Ensembling}{equation.5}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.2}Constrained Post-Hoc Scalar Temperature Scaling}{9}{subsection.6.2}\protected@file@percent }
+\newlabel{eq:temp_softmax}{{6}{9}{Constrained Post-Hoc Scalar Temperature Scaling}{equation.6}{}}
+\newlabel{eq:temp_param}{{7}{9}{Constrained Post-Hoc Scalar Temperature Scaling}{equation.7}{}}
+\newlabel{eq:temp_init}{{8}{9}{Constrained Post-Hoc Scalar Temperature Scaling}{equation.8}{}}
+\newlabel{eq:temp_loss}{{9}{9}{Constrained Post-Hoc Scalar Temperature Scaling}{equation.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {6.3}Deterministic Split-Conformal Prediction (APS and RAPS)}{9}{subsection.6.3}\protected@file@percent }
+\newlabel{eq:aps_score}{{10}{10}{Deterministic Split-Conformal Prediction (APS and RAPS)}{equation.10}{}}
+\newlabel{eq:raps_score}{{11}{10}{Deterministic Split-Conformal Prediction (APS and RAPS)}{equation.11}{}}
+\newlabel{eq:conformal_k}{{12}{10}{Deterministic Split-Conformal Prediction (APS and RAPS)}{equation.12}{}}
+\newlabel{eq:pred_sets}{{13}{10}{Deterministic Split-Conformal Prediction (APS and RAPS)}{equation.13}{}}
+\@writefile{lol}{\contentsline {lstlisting}{\numberline {1}Core conformal quantile and deterministic APS/RAPS prediction-set construction in Section~10.}{10}{lstlisting.1}\protected@file@percent }
+\gdef \LT@i {\LT@entry 
+    {1}{149.41893pt}\LT@entry 
+    {1}{99.5922pt}\LT@entry 
+    {1}{199.24568pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {7}Processing and Experiment Execution Procedure}{11}{section.7}\protected@file@percent }
+\newlabel{sec:procedure}{{7}{11}{Processing and Experiment Execution Procedure}{section.7}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.1}Experiment Matrix Construction}{11}{subsection.7.1}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Breakdown of the 149 \texttt  {ExperimentSpec} instances generated per calibration seed by \texttt  {build\_\allowbreak  {}experiment\_\allowbreak  {}specs(seed)}.}}{11}{table.2}\protected@file@percent }
+\newlabel{tab:exp_matrix}{{2}{11}{Breakdown of the 149 \texttt {ExperimentSpec} instances generated per calibration seed by \texttt {build\_\allowbreak {}experiment\_\allowbreak {}specs(seed)}}{table.2}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {7.2}Resumable Execution Loop}{11}{subsection.7.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {8}Configuration and Parameter Handling}{11}{section.8}\protected@file@percent }
+\newlabel{sec:config}{{8}{11}{Configuration and Parameter Handling}{section.8}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{Configuration constants defined in Section~2 and Section~4.}}{11}{table.3}\protected@file@percent }
+\newlabel{tab:config}{{3}{11}{Configuration constants defined in Section~2 and Section~4}{table.3}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {9}Evaluation, Aggregation, and Postprocessing Implementation}{13}{section.9}\protected@file@percent }
+\newlabel{sec:evaluation}{{9}{13}{Evaluation, Aggregation, and Postprocessing Implementation}{section.9}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.1}Per-Condition Evaluation Metrics}{13}{subsection.9.1}\protected@file@percent }
+\newlabel{eq:ece}{{23}{13}{Per-Condition Evaluation Metrics}{equation.23}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.2}Selective Top-1 Risk-Coverage Curves}{13}{subsection.9.2}\protected@file@percent }
+\newlabel{eq:risk_cov}{{24}{14}{Selective Top-1 Risk-Coverage Curves}{equation.24}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {9.3}Seed-Level Statistical Aggregation}{14}{subsection.9.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {10}Output Generation and File Handling}{14}{section.10}\protected@file@percent }
+\newlabel{sec:outputs}{{10}{14}{Output Generation and File Handling}{section.10}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {11}Error Handling, Reproducibility, and Execution Considerations}{15}{section.11}\protected@file@percent }
+\newlabel{sec:reproducibility}{{11}{15}{Error Handling, Reproducibility, and Execution Considerations}{section.11}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.1}Randomness Control and Determinism}{15}{subsection.11.1}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {11.2}Exception Handling and Forensic Auditing}{15}{subsection.11.2}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {12}Implementation Limitations}{16}{section.12}\protected@file@percent }
+\newlabel{sec:limitations}{{12}{16}{Implementation Limitations}{section.12}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {13}Summary of the Implementation}{16}{section.13}\protected@file@percent }
+\newlabel{sec:summary}{{13}{16}{Summary of the Implementation}{section.13}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {A}Function and Class Interface Reference}{16}{appendix.A}\protected@file@percent }
+\newlabel{app:interfaces}{{A}{16}{Function and Class Interface Reference}{appendix.A}{}}
+\gdef \LT@ii {\LT@entry 
+    {1}{144.89174pt}\LT@entry 
+    {1}{140.35764pt}\LT@entry 
+    {1}{163.00742pt}}
+\@writefile{lot}{\contentsline {table}{\numberline {4}{Summary of classes and functions in \texttt  {prompt\_\allowbreak  {}shift\_\allowbreak  {}conformal\_\allowbreak  {}vlm\_\allowbreak  {}persistent.py}.}}{17}{table.4}\protected@file@percent }
+\newlabel{tab:interfaces}{{4}{17}{Summary of classes and functions in \texttt {prompt\_\allowbreak {}shift\_\allowbreak {}conformal\_\allowbreak {}vlm\_\allowbreak {}persistent.py}}{table.4}{}}
+\gdef \LT@iii {\LT@entry 
+    {1}{28.97932pt}\LT@entry 
+    {4}{55.41687pt}\LT@entry 
+    {4}{50.9999pt}\LT@entry 
+    {1}{298.89917pt}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}Notebook-to-Script Cell Mapping}{19}{appendix.B}\protected@file@percent }
+\newlabel{app:mapping}{{B}{19}{Notebook-to-Script Cell Mapping}{appendix.B}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {5}{Cell-by-cell mapping of \texttt  {prompt\_\allowbreak  {}shift\_\allowbreak  {}conformal\_\allowbreak  {}vlm\_\allowbreak  {}persistent.ipynb}.}}{19}{table.5}\protected@file@percent }
+\newlabel{tab:cell_map}{{5}{19}{Cell-by-cell mapping of \texttt {prompt\_\allowbreak {}shift\_\allowbreak {}conformal\_\allowbreak {}vlm\_\allowbreak {}persistent.ipynb}}{table.5}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {C}Summary of Code Cleanup and Audit Findings}{20}{appendix.C}\protected@file@percent }
+\newlabel{app:changes}{{C}{20}{Summary of Code Cleanup and Audit Findings}{appendix.C}{}}
+\@writefile{lot}{\contentsline {table}{\numberline {6}{\ignorespaces Summary of substantive code modifications recorded in \texttt  {code\_\allowbreak  {}changes.py}.}}{21}{table.6}\protected@file@percent }
+\newlabel{tab:changes_summary}{{6}{21}{Summary of substantive code modifications recorded in \texttt {code\_\allowbreak {}changes.py}}{table.6}{}}
+\gdef \@abspage@last{21}

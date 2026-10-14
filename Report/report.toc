@@ -1,0 +1,35 @@
+\contentsline {section}{\numberline {1}Introduction and Scope}{2}{section.1}%
+\contentsline {section}{\numberline {2}Project Structure and Software Dependencies}{3}{section.2}%
+\contentsline {subsection}{\numberline {2.1}Delivered Source Files}{3}{subsection.2.1}%
+\contentsline {subsection}{\numberline {2.2}Runtime Directory Hierarchy}{3}{subsection.2.2}%
+\contentsline {subsection}{\numberline {2.3}Software Dependencies}{3}{subsection.2.3}%
+\contentsline {section}{\numberline {3}Overall Implementation Workflow}{5}{section.3}%
+\contentsline {section}{\numberline {4}Input Data and Preparation}{6}{section.4}%
+\contentsline {subsection}{\numberline {4.1}CIFAR-10 Acquisition and Verification}{6}{subsection.4.1}%
+\contentsline {subsection}{\numberline {4.2}CIFAR-10-C Archive Acquisition, Extraction, and Alignment}{6}{subsection.4.2}%
+\contentsline {subsection}{\numberline {4.3}Stratified Split Construction}{6}{subsection.4.3}%
+\contentsline {section}{\numberline {5}Main Components}{7}{section.5}%
+\contentsline {subsection}{\numberline {5.1}Filesystem, Hashing, and Cache Validation Helpers (Section~3)}{7}{subsection.5.1}%
+\contentsline {subsection}{\numberline {5.2}Dataset Wrappers (Sections~4 and 6)}{8}{subsection.5.2}%
+\contentsline {subsection}{\numberline {5.3}Embedding and Logit Caching Layer (Sections~5--8)}{8}{subsection.5.3}%
+\contentsline {section}{\numberline {6}Model and Algorithm Implementation}{8}{section.6}%
+\contentsline {subsection}{\numberline {6.1}Zero-Shot CLIP Similarity Logits and Prompt Ensembling}{8}{subsection.6.1}%
+\contentsline {subsection}{\numberline {6.2}Constrained Post-Hoc Scalar Temperature Scaling}{9}{subsection.6.2}%
+\contentsline {subsection}{\numberline {6.3}Deterministic Split-Conformal Prediction (APS and RAPS)}{9}{subsection.6.3}%
+\contentsline {section}{\numberline {7}Processing and Experiment Execution Procedure}{11}{section.7}%
+\contentsline {subsection}{\numberline {7.1}Experiment Matrix Construction}{11}{subsection.7.1}%
+\contentsline {subsection}{\numberline {7.2}Resumable Execution Loop}{11}{subsection.7.2}%
+\contentsline {section}{\numberline {8}Configuration and Parameter Handling}{11}{section.8}%
+\contentsline {section}{\numberline {9}Evaluation, Aggregation, and Postprocessing Implementation}{13}{section.9}%
+\contentsline {subsection}{\numberline {9.1}Per-Condition Evaluation Metrics}{13}{subsection.9.1}%
+\contentsline {subsection}{\numberline {9.2}Selective Top-1 Risk-Coverage Curves}{13}{subsection.9.2}%
+\contentsline {subsection}{\numberline {9.3}Seed-Level Statistical Aggregation}{14}{subsection.9.3}%
+\contentsline {section}{\numberline {10}Output Generation and File Handling}{14}{section.10}%
+\contentsline {section}{\numberline {11}Error Handling, Reproducibility, and Execution Considerations}{15}{section.11}%
+\contentsline {subsection}{\numberline {11.1}Randomness Control and Determinism}{15}{subsection.11.1}%
+\contentsline {subsection}{\numberline {11.2}Exception Handling and Forensic Auditing}{15}{subsection.11.2}%
+\contentsline {section}{\numberline {12}Implementation Limitations}{16}{section.12}%
+\contentsline {section}{\numberline {13}Summary of the Implementation}{16}{section.13}%
+\contentsline {section}{\numberline {A}Function and Class Interface Reference}{16}{appendix.A}%
+\contentsline {section}{\numberline {B}Notebook-to-Script Cell Mapping}{19}{appendix.B}%
+\contentsline {section}{\numberline {C}Summary of Code Cleanup and Audit Findings}{20}{appendix.C}%

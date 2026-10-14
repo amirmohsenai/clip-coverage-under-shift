@@ -1,0 +1,600 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{listings}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parskip}{5pt plus 2pt minus 1pt}
+\setlength{\parindent}{0pt}
+\renewcommand{\arraystretch}{1.18}
+\setlength{\tabcolsep}{4.5pt}
+\emergencystretch=3em
+\sloppy
+\newcolumntype{Y}{>{\raggedright\arraybackslash}X}
+\newcolumntype{P}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\footnotesize,
+  keywordstyle=\bfseries,
+  commentstyle=\itshape,
+  stringstyle=\ttfamily,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  xleftmargin=4pt,
+  xrightmargin=4pt,
+  aboveskip=6pt,
+  belowskip=6pt
+}
+
+\title{Technical Implementation Report:\\Prompt- and Shift-Aware Conformal Reliability of Zero-Shot Vision-Language Models}
+\author{Software Documentation Maintainer}
+\date{October 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+This report documents the software architecture, data flow, mathematical operations, configuration parameters, and verification procedures implemented in \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.py} and its synchronized Jupyter notebook \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.ipynb}. The codebase implements a reproducible evaluation pipeline for Google Colab (with persistent Google Drive storage and a local filesystem fallback) that applies split-conformal prediction to a frozen OpenAI CLIP \texttt{ViT-B/\allowbreak{}32} zero-shot classifier across CIFAR-10 and CIFAR-10-C. The implementation covers resumable dataset acquisition and integrity verification, stratified index-split generation across five random seeds, cached L2-normalized text and image embedding extraction, prompt-template and ensemble logit computation, L-BFGS post-hoc scalar temperature scaling, deterministic Adaptive Prediction Sets (APS) and Regularized Adaptive Prediction Sets (RAPS), per-condition reliability metric calculation, across-seed percentile bootstrap aggregation, programmatic table and figure generation, automated forensic auditing, and final archive packaging. In accordance with its technical documentation scope, this report explains how the software is constructed and how its components interact without presenting experimental measurements or performance claims.
+\end{abstract}
+
+\vspace{6pt}
+\tableofcontents
+\vspace{10pt}
+
+\section{Introduction and Scope}
+\label{sec:intro}
+
+The supplied project evaluates how split-conformal prediction sets constructed around a frozen zero-shot vision-language model behave when the test distribution differs from the calibration distribution. Specifically, the software isolates two axes of distribution shift on 10-class image classification:
+\begin{enumerate}
+  \item \textbf{Prompt shift:} changing the natural-language class template used to form zero-shot text embeddings at evaluation time relative to the template used at calibration time, or ensembling logits across multiple templates.
+  \item \textbf{Visual shift:} evaluating a classifier calibrated on clean CIFAR-10 training images against corrupted CIFAR-10-C test images across multiple corruption families and severity levels, and comparing that baseline against a matched-shift calibration regime in which disjoint calibration and evaluation subsets are drawn from the same corrupted condition.
+\end{enumerate}
+
+The implementation is intentionally scoped as a controlled empirical stress-test pipeline rather than a model-training framework or a novel conformal algorithm. The vision-language backbone (OpenAI CLIP \texttt{ViT-B/\allowbreak{}32}) is kept strictly frozen with gradients disabled across all parameters; no fine-tuning, prompt tuning, or linear probing is implemented. Post-hoc adaptation is restricted to scalar temperature scaling fitted by maximum likelihood on the active calibration split prior to conformal score computation.
+
+All functionality exists in two synchronized representations:
+\begin{itemize}
+  \item \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.ipynb}, a 43-cell Jupyter notebook (22 code cells and 21 Markdown cells) structured for sequential execution in Google Colab.
+  \item \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.py}, a standalone Python script containing the exact code cells and section docstrings of the notebook.
+\end{itemize}
+Alongside the reviewed source files, the project audit includes \texttt{code\_\allowbreak{}changes.py}, which records all substantive cleanups and bug fixes applied during code review.
+
+\section{Project Structure and Software Dependencies}
+\label{sec:structure}
+
+\subsection{Delivered Source Files}
+The reviewed codebase consists of two executable source files (\texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.py} and \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.ipynb}), the change-audit module (\texttt{code\_\allowbreak{}changes.py}), \texttt{README.md}, and this technical report (\texttt{report.tex} and \texttt{report.pdf}). No separate local helper packages are imported by the script; all classes, helper functions, and execution loops reside within the main module and notebook.
+
+\subsection{Runtime Directory Hierarchy}
+At runtime, Section~2 of the code initializes a self-contained directory tree rooted at \texttt{ROOT}. When \texttt{USE\_\allowbreak{}GOOGLE\_\allowbreak{}DRIVE} is \texttt{True} (the default), \texttt{ROOT} resolves to \texttt{/\allowbreak{}content/\allowbreak{}drive/\allowbreak{}MyDrive/\allowbreak{}prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm}; when \texttt{False}, it resolves to \texttt{/\allowbreak{}content/\allowbreak{}prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm}. Table~\ref{tab:directories} lists the directory path variables created at startup and their roles.
+
+\begin{table}[!htbp]
+\centering
+\caption{Workspace directory variables defined in Section~2 and their runtime responsibilities.}
+\label{tab:directories}
+\small\begin{tabularx}{\textwidth}{l l Y}
+\toprule
+\textbf{Variable} & \textbf{Relative Path} & \textbf{Responsibility} \\
+\midrule
+\texttt{ROOT} & \texttt{.} & Top-level persistent project directory; also stores generated \texttt{README.md}, \texttt{EXPERIMENT\_\allowbreak{}PROTOCOL.md}, \texttt{LIMITATIONS.md}, \texttt{requirements.txt}, and the final ZIP archive. \\
+\texttt{DATA\_\allowbreak{}ROOT} & \texttt{data/\allowbreak{}} & Parent directory for dataset archives and extracted dataset folders, including \texttt{CIFAR-10-C.tar} (\texttt{CIFAR10C\_\allowbreak{}TAR}). \\
+\texttt{CIFAR10\_\allowbreak{}ROOT} & \texttt{data/\allowbreak{}cifar10/\allowbreak{}} & Storage location for the official \texttt{torchvision.datasets.CIFAR10} train and test partitions. \\
+\texttt{CIFAR10C\_\allowbreak{}ROOT} & \texttt{data/\allowbreak{}cifar10c/\allowbreak{}} & Destination for extracted CIFAR-10-C corruption arrays (\texttt{<corruption>.npy}) and \texttt{labels.npy}. \\
+\texttt{SPLITS\_\allowbreak{}ROOT} & \texttt{splits/\allowbreak{}} & Stores compressed \texttt{.npz} index-split files for the fixed shifted test set, clean calibration splits, and matched-shift splits. \\
+\texttt{CACHE\_\allowbreak{}ROOT} & \texttt{cache/\allowbreak{}} & Parent directory for persistent model checkpoints, text embeddings, image embeddings, logits, and calibration states. \\
+\texttt{CLIP\_\allowbreak{}WEIGHTS\_\allowbreak{}ROOT} & \texttt{cache/\allowbreak{}clip\_\allowbreak{}weights/\allowbreak{}} & Stores the SHA-256-verified \texttt{ViT-B-32.pt} checkpoint (\texttt{CLIP\_\allowbreak{}WEIGHTS\_\allowbreak{}PATH}). \\
+\texttt{CLEAN\_\allowbreak{}EMBED\_\allowbreak{}ROOT} & \texttt{cache/\allowbreak{}image\_\allowbreak{}embeddings/\allowbreak{}} & Stores \texttt{clean\_\allowbreak{}test\_\allowbreak{}all.npz} and \texttt{clean\_\allowbreak{}cal\_\allowbreak{}seed\_\allowbreak{}<seed>.npz}. \\
+\texttt{SHIFT\_\allowbreak{}EMBED\_\allowbreak{}ROOT} & \texttt{cache/\allowbreak{}cifar10c\_\allowbreak{}embeddings/\allowbreak{}} & Stores per-corruption, per-severity \texttt{.npz} image embedding caches. \\
+\texttt{LOGIT\_\allowbreak{}CACHE\_\allowbreak{}ROOT} & \texttt{cache/\allowbreak{}logits/\allowbreak{}} & Stores cached \texttt{[N, 10]} logit matrices organized by condition tag and prompt name. \\
+\texttt{CAL\_\allowbreak{}STATE\_\allowbreak{}ROOT} & \texttt{cache/\allowbreak{}calibration\_\allowbreak{}states/\allowbreak{}} & Stores per-condition fitted temperature and conformal quantile JSON files. \\
+\texttt{RESULTS\_\allowbreak{}ROOT} & \texttt{results/\allowbreak{}} & Stores \texttt{experiment\_\allowbreak{}manifest.csv}, \texttt{results\_\allowbreak{}checkpoint.csv}, \texttt{results.csv}, \texttt{results\_\allowbreak{}aggregated\_\allowbreak{}across\_\allowbreak{}seeds.csv}, and \texttt{risk\_\allowbreak{}coverage.csv}. \\
+\texttt{FIGURES\_\allowbreak{}ROOT} & \texttt{results/\allowbreak{}figures/\allowbreak{}} & Stores the six diagnostic PNG figures. \\
+\texttt{TABLES\_\allowbreak{}ROOT} & \texttt{results/\allowbreak{}tables/\allowbreak{}} & Stores \texttt{main\_comparison\_table.\{csv,html,png\}} and \texttt{ablation\_\allowbreak{}summary\_\allowbreak{}APS.csv}. \\
+\texttt{METADATA\_\allowbreak{}ROOT} & \texttt{metadata/\allowbreak{}} & Stores \texttt{environment.json}, \texttt{config.json}, \texttt{forensic\_\allowbreak{}audit.json}, and \texttt{persistence\_\allowbreak{}status.json}. \\
+\texttt{LOG\_\allowbreak{}ROOT} & \texttt{logs/\allowbreak{}} & Reserved log directory copied into \texttt{final\_\allowbreak{}artifacts/\allowbreak{}metadata/\allowbreak{}} if populated. \\
+\texttt{ASSETS\_\allowbreak{}ROOT} & \texttt{assets/\allowbreak{}} & Stores \texttt{pipeline\_\allowbreak{}diagram.png}. \\
+\texttt{FINAL\_\allowbreak{}ROOT} & \texttt{final\_\allowbreak{}artifacts/\allowbreak{}} & Staging directory assembled in Section~21 prior to creating \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}final\_\allowbreak{}artifacts.zip}. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Software Dependencies}
+The implementation uses three categories of libraries:
+\begin{enumerate}
+  \item \textbf{Python standard library:} \texttt{\_\allowbreak{}\_\allowbreak{}future\_\allowbreak{}\_\allowbreak{}}, \texttt{dataclasses} (\texttt{dataclass}, \texttt{field}), \texttt{hashlib}, \texttt{importlib}, \texttt{json}, \texttt{math}, \texttt{ pathlib} (\texttt{Path}), \texttt{platform}, \texttt{random}, \texttt{shutil}, \texttt{subprocess}, \texttt{sys}, \texttt{tarfile}, \texttt{time}, \texttt{typing}, \texttt{urllib.error}, \texttt{urllib.parse}, \texttt{urllib.request}, \texttt{warnings}, and \texttt{zipfile}.
+  \item \textbf{Pre-installed scientific and deep-learning stack:} \texttt{numpy}, \texttt{pandas}, \texttt{torch}, \texttt{torch.nn.functional}, \texttt{torch.utils.data} (\texttt{Dataset}, \texttt{DataLoader}), \texttt{torchvision}, \texttt{torchvision.datasets} (\texttt{CIFAR10}), \texttt{PIL.Image}, and \texttt{matplotlib} (\texttt{pyplot}, \texttt{colors.Normalize}).
+  \item \textbf{Research-specific packages installed in Section~1 (\texttt{REQUIRED\_\allowbreak{}PIP}):} \texttt{clip} (installed from \texttt{git+https:/\allowbreak{}/\allowbreak{}github.com/\allowbreak{}openai/\allowbreak{}CLIP.git}), \texttt{ftfy}, \texttt{regex}, and \texttt{tqdm} (\texttt{tqdm.auto.tqdm}). In Google Colab environments, \texttt{google.colab.drive} and \texttt{google.colab.files} are also imported conditionally.
+\end{enumerate}
+
+\section{Overall Implementation Workflow}
+\label{sec:workflow}
+
+Execution proceeds sequentially through 21 numbered sections. Figure-level and table-level outputs depend strictly on files persisted by earlier stages:
+
+\begin{enumerate}
+  \item \textbf{Stage 1 -- Environment \& Configuration (Sections~1--3):} Installs \texttt{REQUIRED\_\allowbreak{}PIP}, imports all modules, defines protocol constants, mounts Google Drive when \texttt{USE\_\allowbreak{}GOOGLE\_\allowbreak{}DRIVE} is enabled, creates directory trees, seeds random number generators via \texttt{set\_\allowbreak{}global\_\allowbreak{}seed(PRIMARY\_\allowbreak{}SEED)}, writes \texttt{environment.json} and \texttt{config.json}, and defines hashing, JSON, seed, and split-validation helper functions.
+  \item \textbf{Stage 2 -- Dataset \& Split Preparation (Section~4):} Loads CIFAR-10 train ($50{,}000$) and test ($10{,}000$) partitions; verifies or downloads \texttt{CIFAR-10-C.tar}; extracts the six primary corruption \texttt{.npy} arrays and \texttt{labels.npy}; verifies label equality across all five 10,000-image severity blocks; generates or validates the fixed 5,000-image shifted test split (\texttt{shift\_\allowbreak{}test\_\allowbreak{}indices}), five 5,000-image clean calibration splits (\texttt{clean\_\allowbreak{}calibration\_\allowbreak{}indices}), and five disjoint $(2{,}000, 5{,}000)$ matched-shift splits (\texttt{matched\_\allowbreak{}splits}); and runs explicit class-balance assertions.
+  \item \textbf{Stage 3 -- Backbone \& Feature Caching (Sections~5--7):} Verifies or downloads \texttt{ViT-B-32.pt}; loads the frozen CLIP model in evaluation mode; extracts \texttt{logit\_\allowbreak{}scale}; encodes and caches the $(10, 512)$ L2-normalized class text embeddings for each of the four prompt templates in \texttt{text\_\allowbreak{}features.npz}; encodes and caches the $(10000, 512)$ clean test image embeddings and five $(5000, 512)$ clean calibration image embeddings; and defines \texttt{get\_\allowbreak{}shift\_\allowbreak{}embeddings} for lazy extraction of corrupted image subsets.
+  \item \textbf{Stage 4 -- Scoring, Calibration, \& Sanity Testing (Sections~8--13):} Defines matrix-multiplication logit computation, arithmetic-mean logit ensembling, softmax probability conversion, L-BFGS scalar temperature scaling, APS/RAPS calibration scoring and prediction-set construction, evaluation metrics, and the 2,235-row experiment matrix (\texttt{experiment\_\allowbreak{}manifest.csv}), followed by an end-to-end sanity check on 128 calibration and 256 test examples.
+  \item \textbf{Stage 5 -- Full Experiment Execution \& Aggregation (Sections~14--15):} Loops over all five seeds, 149 \texttt{ExperimentSpec} instances per seed, and three methods (\texttt{APS}, \texttt{TS+APS}, \texttt{RAPS}). Each completed row is appended to \texttt{results\_\allowbreak{}checkpoint.csv}; once all 2,235 rows are present, the sorted table is written to \texttt{results.csv} and aggregated across seeds into \texttt{results\_\allowbreak{}aggregated\_\allowbreak{}across\_\allowbreak{}seeds.csv}.
+  \item \textbf{Stage 6 -- Postprocessing, Auditing, \& Packaging (Sections~16--21):} Generates Figures~1--6 and \texttt{risk\_\allowbreak{}coverage.csv}, builds \texttt{main\_comparison\_table.\{csv,html,png\}} and \texttt{ablation\_\allowbreak{}summary\_\allowbreak{}APS.csv}, runs \texttt{run\_\allowbreak{}forensic\_\allowbreak{}audit}, writes Markdown documentation files and \texttt{pipeline\_\allowbreak{}diagram.png}, copies all verified deliverables into \texttt{final\_\allowbreak{}artifacts/\allowbreak{}}, writes \texttt{artifact\_\allowbreak{}manifest.csv}, and builds \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}final\_\allowbreak{}artifacts.zip}.
+\end{enumerate}
+
+\section{Input Data and Preparation}
+\label{sec:data}
+
+\subsection{CIFAR-10 Acquisition and Verification}
+The function \texttt{ensure\_\allowbreak{}cifar10()} calls \texttt{\_\allowbreak{}load\_\allowbreak{}or\_\allowbreak{}download\_\allowbreak{}cifar10\_\allowbreak{}split(train=True)} and \texttt{\_\allowbreak{}load\_\allowbreak{}or\_\allowbreak{}download\_\allowbreak{}cifar10\_\allowbreak{}split(train=False)}. Each call first attempts \texttt{CIFAR10(root=str(CIFAR10\_\allowbreak{}ROOT), train=train, download=False)} so existing persistent files on Google Drive are reused without network traffic. If loading fails and \texttt{AUTO\_\allowbreak{}DOWNLOAD\_\allowbreak{}MISSING} is \texttt{True}, it retries with \texttt{download=True}. Afterwards, \texttt{ensure\_\allowbreak{}cifar10()} asserts that \texttt{list(train.classes) == CLASS\_\allowbreak{}NAMES}, \texttt{list(test.classes) == CLASS\_\allowbreak{}NAMES}, \texttt{len(train) == 50\_\allowbreak{}000}, and \texttt{len(test) == 10\_\allowbreak{}000}, where \texttt{CLASS\_\allowbreak{}NAMES} is the canonical 10-element list \texttt{["airplane", "automobile", "bird", "cat", "deer", "dog", "frog", "horse", "ship", "truck"]}. The integer target lists \texttt{train\_\allowbreak{}ds.targets} and \texttt{clean\_\allowbreak{}test\_\allowbreak{}ds.targets} are converted to 1D \texttt{int64} NumPy arrays \texttt{train\_\allowbreak{}labels} and \texttt{clean\_\allowbreak{}test\_\allowbreak{}labels}.
+
+\subsection{CIFAR-10-C Archive Acquisition, Extraction, and Alignment}
+Rather than downloading the 2.92~GB Zenodo archive unconditionally, \texttt{extract\_\allowbreak{}selected\_\allowbreak{}cifar10c\_\allowbreak{}members()} first calls \texttt{\_\allowbreak{}all\_\allowbreak{}required\_\allowbreak{}cifar10c\_\allowbreak{}files\_\allowbreak{}present()}, which invokes \texttt{\_\allowbreak{}valid\_\allowbreak{}extracted\_\allowbreak{}cifar10c\_\allowbreak{}file(stem)} for each of the six configured corruption keys (\texttt{gaussian\_\allowbreak{}noise}, \texttt{motion\_\allowbreak{}blur}, \texttt{fog}, \texttt{brightness}, \texttt{contrast}, \texttt{jpeg\_\allowbreak{}compression}) plus \texttt{labels}. A corruption file is considered valid if and only if its file size exceeds 128 bytes and \texttt{np.load(path, mmap\_\allowbreak{}mode="r", allow\_\allowbreak{}pickle=False)} returns an array with shape \texttt{(50000, 32, 32, 3)} and dtype \texttt{uint8}. The \texttt{labels.npy} file is valid if its shape is \texttt{(50000,)}, its dtype is an integer type (\texttt{np.issubdtype(arr.dtype, np.integer)}), and all values lie in $[0, 9]$.
+
+If any required \texttt{.npy} file is missing or invalid, \texttt{ensure\_\allowbreak{}cifar10c\_\allowbreak{}archive()} checks whether \texttt{CIFAR-10-C.tar} exists. If absent or incomplete, \texttt{download\_\allowbreak{}with\_\allowbreak{}progress()} streams the archive in 8~MiB chunks into \texttt{CIFAR-10-C.tar.partial}. If a partial file exists from an interrupted session, the downloader sends an HTTP \texttt{Range: bytes=<resume\_\allowbreak{}from>-} header; if the server responds with HTTP 206 and a \texttt{Content-Range} header, downloading resumes in \texttt{"ab"} mode, whereas if the server ignores the range request, the partial file is unlinked and the download restarts cleanly from byte~0 with exponential backoff up to \texttt{max\_\allowbreak{}retries = 5}. Once downloaded, \texttt{\_\allowbreak{}verify\_\allowbreak{}cifar10c\_\allowbreak{}archive()} verifies both the MD5 digest (\texttt{56bf5dcef84df0e2308c6dcbcbbd8499}) and the SHA-256 digest (\texttt{c72763e1...cf3cb876a7}).
+
+During extraction, \texttt{extract\_\allowbreak{}selected\_\allowbreak{}cifar10c\_\allowbreak{}members()} opens \texttt{CIFAR-10-C.tar} via \texttt{tarfile.open(archive, mode="r:*")}, locates each member via \texttt{\_\allowbreak{}find\_\allowbreak{}tar\_\allowbreak{}member()}, streams it in 8~MiB chunks to a \texttt{.partial} file, atomically renames it to \texttt{data/\allowbreak{}cifar10c/\allowbreak{}<stem>.npy}, and re-runs \texttt{\_\allowbreak{}valid\_\allowbreak{}extracted\_\allowbreak{}cifar10c\_\allowbreak{}file(stem)}. Next, \texttt{verify\_\allowbreak{}cifar10c\_\allowbreak{}alignment()} verifies that for every severity level $s \in \{1, 2, 3, 4, 5\}$, the slice \texttt{labels[(s - 1) * 10000 : s * 10000]} is elementwise identical to \texttt{clean\_\allowbreak{}test\_\allowbreak{}labels}, and checks the leading 10 images of every severity block across all six corruptions.
+
+\subsection{Stratified Split Construction}
+All data splits are constructed via \texttt{stratified\_\allowbreak{}indices(labels, size, seed)} or class-wise partitioned sampling, and persisted as compressed \texttt{.npz} files:
+\begin{itemize}
+  \item \textbf{Fixed shifted evaluation subset (\texttt{shift\_\allowbreak{}test\_\allowbreak{}5000\_\allowbreak{}seed\_\allowbreak{}20270317.npz}):} Samples $5{,}000 / 10 = 500$ indices per class without replacement from \texttt{clean\_\allowbreak{}test\_\allowbreak{}labels} using \texttt{np.random.default\_\allowbreak{}rng(20270317)}, concatenates the per-class arrays, and shuffles the combined array in place. This single 5,000-image subset is shared across all corruptions, severities, and seeds for clean-calibrated shifted evaluations (E2--E4 and E6).
+  \item \textbf{Clean calibration splits (\texttt{clean\_\allowbreak{}calibration\_\allowbreak{}seed\_\allowbreak{}<seed>.npz}):} For each $s \in \{13, 42, 123, 456, 765\}$, samples $5{,}000 / 10 = 500$ training indices per class without replacement from \texttt{train\_\allowbreak{}labels} using \texttt{np.random.default\_\allowbreak{}rng(s)}.
+  \item \textbf{Matched-shift splits (\texttt{matched\_\allowbreak{}shift\_\allowbreak{}seed\_\allowbreak{}<seed>.npz}):} For each $s \in \{13, 42, 123, 456, 765\}$, derives a seed via \texttt{stable\_\allowbreak{}condition\_\allowbreak{}seed(MATCHED\_\allowbreak{}BASE\_\allowbreak{}SEED, s)}:
+  \begin{equation}
+    \label{eq:xor_seed}
+    \text{seed\_value}(s) = \bigl((914{,}159 \times 1{,}000{,}003) \oplus (s \times 97{,}531) \oplus \text{0x9E3779B9}\bigr) \bmod (2^{32} - 1).
+  \end{equation}
+  Using \texttt{np.random.default\_\allowbreak{}rng(seed\_\allowbreak{}value)}, the code iterates over each class $c \in \{0, \dots, 9\}$ in \texttt{clean\_\allowbreak{}test\_\allowbreak{}labels} (which has $1{,}000$ images per class), samples $200 + 500 = 700$ indices without replacement, assigns the first $200$ to \texttt{cal\_\allowbreak{}parts} and the remaining $500$ to \texttt{test\_\allowbreak{}parts}, concatenates across classes, and shuffles \texttt{cal\_\allowbreak{}idx} ($2{,}000$ images) and \texttt{test\_\allowbreak{}idx} ($5{,}000$ images) independently. This guarantees exact class balance in both partitions and zero index overlap ($\text{cal\_idx} \cap \text{test\_idx} = \emptyset$).
+\end{itemize}
+
+\section{Main Components}
+\label{sec:components}
+
+\subsection{Filesystem, Hashing, and Cache Validation Helpers (Section~3)}
+\begin{itemize}
+  \item \texttt{sha256\_\allowbreak{}file(path, chunk\_\allowbreak{}size=8*1024*1024)} and \texttt{md5\_\allowbreak{}file(path, chunk\_\allowbreak{}size=8*1024*1024)}: Stream binary files in 8~MiB chunks through \texttt{hashlib.sha256()} or \texttt{hashlib.md5()} and return the lowercase hexadecimal digest string.
+  \item \texttt{sanitize\_\allowbreak{}name(value)}: Converts an arbitrary value to a string and replaces any character outside \texttt{[A-Za-z0-9\_\allowbreak{}-]} with \texttt{"\_\allowbreak{}"}.
+  \item \texttt{atomic\_\allowbreak{}write\_\allowbreak{}json(path, payload)}: Writes formatted JSON (\texttt{indent=2, sort\_\allowbreak{}keys=True, default=str}) to \texttt{path.with\_\allowbreak{}suffix(path.suffix + ".tmp")} and atomically replaces \texttt{path} via \texttt{Path.replace}.
+  \item \texttt{save\_\allowbreak{}indices(path, indices, labels, metadata)} and \texttt{load\_\allowbreak{}valid\_\allowbreak{}indices(path, expected\_\allowbreak{}size, reference\_\allowbreak{}labels=None)}: Persist and validate 1D integer index arrays alongside their corresponding label slices and JSON metadata. \texttt{load\_\allowbreak{}valid\_\allowbreak{}indices} returns \texttt{None} (triggering regeneration) if the file is missing, unreadable, not 1D, has length or unique-element count different from \texttt{expected\_\allowbreak{}size}, contains out-of-bounds indices, or has stored labels that disagree with \texttt{reference\_\allowbreak{}labels[indices]}.
+  \item \texttt{finite\_\allowbreak{}and\_\allowbreak{}normalized\_\allowbreak{}probabilities(probs, atol=1e-5)}: Raises an \texttt{AssertionError} if \texttt{probs.shape} is not \texttt{(N, NUM\_\allowbreak{}CLASSES)}, or a \texttt{FloatingPointError} if any entry is non-finite, outside $[-\text{atol}, 1+\text{atol}]$, or if row sums deviate from $1.0$ by more than \texttt{atol}.
+  \item \texttt{cache\_\allowbreak{}npz\_\allowbreak{}valid(path, required\_\allowbreak{}arrays)}: Returns \texttt{True} only if \texttt{path} exists, exceeds 128 bytes, can be opened with \texttt{np.load(..., allow\_\allowbreak{}pickle=False)}, and contains all keys in \texttt{required\_\allowbreak{}arrays}.
+\end{itemize}
+
+\subsection{Dataset Wrappers (Sections~4 and 6)}
+\begin{itemize}
+  \item \texttt{CIFAR10CSubset(corruption\_\allowbreak{}path, labels\_\allowbreak{}path, severity, sample\_\allowbreak{}indices, preprocess)}: Opens the corruption \texttt{.npy} array and \texttt{labels.npy} as read-only memory-mapped arrays (\texttt{mmap\_\allowbreak{}mode="r"}), validates shapes and dtypes, sets \texttt{self.base\_\allowbreak{}offset = (severity - 1) * 10\_\allowbreak{}000}, and on \texttt{\_\allowbreak{}\_\allowbreak{}getitem\_\allowbreak{}\_\allowbreak{}(i)} reads \texttt{idx = int(self.sample\_\allowbreak{}indices[i])}, slices \texttt{self.images[self.base\_\allowbreak{}offset + idx]}, converts the $(32, 32, 3)$ \texttt{uint8} array to a PIL image via \texttt{Image.fromarray(image\_\allowbreak{}array)}, applies the CLIP \texttt{preprocess} transform, and returns \texttt{(tensor, label, idx)}.
+  \item \texttt{CleanCIFARSubset(base\_\allowbreak{}dataset, indices, preprocess\_\allowbreak{}fn)}: Wraps a \texttt{torchvision.datasets.CIFAR10} instance and index array \texttt{indices}, returning \texttt{(preprocess\_\allowbreak{}fn(image), int(label), idx)} for each item so \texttt{encode\_\allowbreak{}image\_\allowbreak{}embeddings} can verify sample ordering.
+\end{itemize}
+
+\subsection{Embedding and Logit Caching Layer (Sections~5--8)}
+\begin{itemize}
+  \item \texttt{ensure\_\allowbreak{}clip\_\allowbreak{}weights()}, \texttt{build\_\allowbreak{}text\_\allowbreak{}features()}, and \texttt{load\_\allowbreak{}or\_\allowbreak{}build\_\allowbreak{}text\_\allowbreak{}features()}: Manage the persistent CLIP checkpoint and the $(10, 512)$ normalized text embedding dictionary \texttt{TEXT\_\allowbreak{}FEATURES}.
+  \item \texttt{encode\_\allowbreak{}image\_\allowbreak{}embeddings(dataset, cache\_\allowbreak{}path, expected\_\allowbreak{}size, expected\_\allowbreak{}ids=None, expected\_\allowbreak{}labels=None, batch\_\allowbreak{}size=None)}: Checks whether \texttt{cache\_\allowbreak{}path} already holds a valid $(N, 512)$ float32 matrix whose L2 row norms are within $2 \times 10^{-4}$ of $1.0$ and whose stored \texttt{sample\_\allowbreak{}ids} and \texttt{labels} match \texttt{expected\_\allowbreak{}ids} and \texttt{expected\_\allowbreak{}labels}. On a cache miss, it runs \texttt{model.encode\_\allowbreak{}image(batch\_\allowbreak{}images).float()} inside \texttt{torch.inference\_\allowbreak{}mode()}, normalizes along \texttt{dim=-1}, validates finiteness and unit norms, and saves the result to \texttt{cache\_\allowbreak{}path}.
+  \item \texttt{get\_\allowbreak{}shift\_\allowbreak{}embeddings(corruption, severity, sample\_\allowbreak{}indices, tag)}: Wraps \texttt{CIFAR10CSubset} and delegates to \texttt{encode\_\allowbreak{}image\_\allowbreak{}embeddings} with cache path \texttt{cache/\allowbreak{}cifar10c\_\allowbreak{}embeddings/\allowbreak{}<corruption>/\allowbreak{}severity\_\allowbreak{}<severity>/\allowbreak{}<tag>.npz}.
+  \item \texttt{logits\_\allowbreak{}from\_\allowbreak{}embeddings(image\_\allowbreak{}embeddings, prompt\_\allowbreak{}condition)} and \texttt{logits\_\allowbreak{}cached(...)}: Compute and persist $(N, 10)$ float32 similarity logits.
+\end{itemize}
+
+\section{Model and Algorithm Implementation}
+\label{sec:algorithms}
+
+\subsection{Zero-Shot CLIP Similarity Logits and Prompt Ensembling}
+Given an image $x$, the frozen CLIP image encoder produces a feature vector $f_{\text{img}}(x) \in \mathbb{R}^{512}$, which is L2-normalized to unit length:
+\begin{equation}
+  \label{eq:img_norm}
+  \hat{u}(x) = \frac{f_{\text{img}}(x)}{\|f_{\text{img}}(x)\|_2}.
+\end{equation}
+For each prompt template $p$ in \{\texttt{P0\_\allowbreak{}canonical}, \texttt{P1\_\allowbreak{}paraphrase}, \texttt{P2\_\allowbreak{}generic\_\allowbreak{}visual}, \texttt{P3\_\allowbreak{}photo\_\allowbreak{}wording}\} and class name $c_j$ ($j \in \{0, \dots, 9\}$), the tokenized string is encoded by \texttt{model.encode\_\allowbreak{}text} into $f_{\text{txt}}(p, c_j) \in \mathbb{R}^{512}$ and L2-normalized:
+\begin{equation}
+  \label{eq:txt_norm}
+  \hat{v}_{p, j} = \frac{f_{\text{txt}}(p, c_j)}{\|f_{\text{txt}}(p, c_j)\|_2}.
+\end{equation}
+Let $V_p \in \mathbb{R}^{10 \times 512}$ denote the matrix whose $j$-th row is $\hat{v}_{p, j}^\top$, and let $s = \exp(\text{\texttt{model.logit\_\allowbreak{}scale}}) \in \mathbb{R}_{>0}$ denote the frozen scalar logit scale ($s = 100.0$ in the \texttt{ViT-B/\allowbreak{}32} checkpoint). In \texttt{logits\_\allowbreak{}from\_\allowbreak{}embeddings}, the zero-shot logit vector $z_p(x) \in \mathbb{R}^{10}$ for a single prompt template $p$ is computed as:
+\begin{equation}
+  \label{eq:single_logits}
+  z_p(x) = s \cdot V_p \hat{u}(x).
+\end{equation}
+When \texttt{prompt\_\allowbreak{}condition} equals \texttt{PROMPT\_\allowbreak{}ENSEMBLE} (\texttt{"ensemble\_\allowbreak{}mean\_\allowbreak{}logits"}), \texttt{logits\_\allowbreak{}from\_\allowbreak{}embeddings} recursively computes $z_p(x)$ for all four templates in \texttt{PROMPTS} and takes their arithmetic mean in logit space:
+\begin{equation}
+  \label{eq:ensemble_logits}
+  z_{\text{ens}}(x) = \frac{1}{|\mathcal{P}|} \sum_{p \in \mathcal{P}} z_p(x), \quad |\mathcal{P}| = 4.
+\end{equation}
+
+\subsection{Constrained Post-Hoc Scalar Temperature Scaling}
+In \texttt{probability\_\allowbreak{}from\_\allowbreak{}logits(logits, temperature=1.0)}, a logit vector $z \in \mathbb{R}^{10}$ is mapped to a categorical probability vector $\hat{\pi}(z; T) \in \Delta^{9}$ via temperature-scaled softmax in \texttt{float64} precision:
+\begin{equation}
+  \label{eq:temp_softmax}
+  \hat{\pi}_j(z; T) = \frac{\exp(z_j / T)}{\sum_{l=0}^{9} \exp(z_l / T)}, \quad j \in \{0, \dots, 9\}.
+\end{equation}
+For the \texttt{APS} and \texttt{RAPS} methods, $T$ is fixed at $1.0$. For \texttt{TS+APS}, \texttt{fit\_\allowbreak{}temperature(logits, labels)} fits $T$ on the active calibration split $\{(z_i, y_i)\}_{i=1}^{n_{\text{cal}}}$ by minimizing the empirical cross-entropy loss. To guarantee $T \in [T_{\min}, T_{\max}] = [0.05, 20.0]$ throughout optimization without unconstrained line-search excursions, $T$ is parameterized by an unconstrained scalar $w \in \mathbb{R}$ via a scaled logistic sigmoid:
+\begin{equation}
+  \label{eq:temp_param}
+  T(w) = T_{\min} + (T_{\max} - T_{\min}) \, \sigma(w), \quad \sigma(w) = \frac{1}{1 + e^{-w}}.
+\end{equation}
+The parameter $w$ is initialized at the geometric midpoint $T_0 = \sqrt{T_{\min} T_{\max}} = 1.0$ via \texttt{\_\allowbreak{}inv\_\allowbreak{}sigmoid}:
+\begin{equation}
+  \label{eq:temp_init}
+  w_0 = \log\left(\frac{f_0}{1 - f_0}\right), \quad f_0 = \text{clip}\!\left(\frac{\sqrt{T_{\min} T_{\max}} - T_{\min}}{T_{\max} - T_{\min}}, 10^{-6}, 1 - 10^{-6}\right),
+\end{equation}
+and optimized with \texttt{torch.optim.LBFGS} (\texttt{lr=0.5}, \texttt{max\_\allowbreak{}iter=50}, \texttt{tolerance\_\allowbreak{}grad=1e-8}, \texttt{tolerance\_\allowbreak{}change=1e-8}, \texttt{line\_\allowbreak{}search\_\allowbreak{}fn="strong\_\allowbreak{}wolfe"}) over the objective:
+\begin{equation}
+  \label{eq:temp_loss}
+  \mathcal{L}(w) = -\frac{1}{n_{\text{cal}}} \sum_{i=1}^{n_{\text{cal}}} \log \hat{\pi}_{y_i}\!\bigl(z_i; T(w)\bigr).
+\end{equation}
+
+\subsection{Deterministic Split-Conformal Prediction (APS and RAPS)}
+Given a probability vector $\hat{\pi}(x) \in \Delta^9$, \texttt{sorted\_\allowbreak{}probabilities(probs)} sorts the class probabilities in descending order using a stable sort (\texttt{np.argsort(-probs, axis=1, kind="stable")}). Let $\pi_{(1)}(x) \ge \pi_{(2)}(x) \ge \dots \ge \pi_{(10)}(x)$ denote the sorted probabilities, let $C_r(x) = \sum_{j=1}^{r} \pi_{(j)}(x)$ denote the cumulative probability up to 1-based rank $r \in \{1, \dots, 10\}$, and let $r(x, y) \in \{1, \dots, 10\}$ denote the 1-based rank of class $y$ in the descending ordering (represented in code as \texttt{rank0 + 1}, where \texttt{rank0 = ranks[i, y]} is 0-based).
+
+\begin{itemize}
+  \item \textbf{Deterministic APS score (\texttt{aps\_\allowbreak{}calibration\_\allowbreak{}scores}):} The nonconformity score $S_{\text{APS}}(x, y)$ is the cumulative probability mass required to include the true label $y$:
+  \begin{equation}
+    \label{eq:aps_score}
+    S_{\text{APS}}(x, y) = C_{r(x, y)}(x) = \sum_{j=1}^{r(x, y)} \pi_{(j)}(x).
+  \end{equation}
+  \item \textbf{Deterministic RAPS score (\texttt{raps\_\allowbreak{}calibration\_\allowbreak{}scores}):} Adds a linear rank penalty with regularization weight $\lambda = \text{\texttt{RAPS\_\allowbreak{}LAMBDA}} = 0.01$ for ranks exceeding $k_{\text{reg}} = \text{\texttt{RAPS\_\allowbreak{}K\_\allowbreak{}REG}} = 5$:
+  \begin{equation}
+    \label{eq:raps_score}
+    S_{\text{RAPS}}(x, y) = C_{r(x, y)}(x) + \lambda \max\bigl(r(x, y) - k_{\text{reg}}, 0\bigr).
+  \end{equation}
+  \item \textbf{Finite-sample order-statistic quantile (\texttt{conformal\_\allowbreak{}quantile}):} Given calibration scores $s_1, \dots, s_{n_{\text{cal}}}$ and miscoverage level $\alpha = 0.10$, the order-statistic index $k$ is computed directly via \texttt{math.ceil}:
+  \begin{equation}
+    \label{eq:conformal_k}
+    k = \min\!\Bigl(\max\!\bigl(\lceil (n_{\text{cal}} + 1)(1 - \alpha) \rceil, \, 1\bigr), \, n_{\text{cal}}\Bigr), \quad \hat{q} = s_{(k)},
+  \end{equation}
+  where $s_{(1)} \le s_{(2)} \le \dots \le s_{(n_{\text{cal}})}$ are the calibration scores sorted via mergesort. For clean calibration ($n_{\text{cal}} = 5{,}000, \alpha = 0.10$), $k = \lceil 5001 \times 0.90 \rceil = \lceil 4500.9 \rceil = 4501$; for matched-shift calibration ($n_{\text{cal}} = 2{,}000, \alpha = 0.10$), $k = \lceil 2001 \times 0.90 \rceil = \lceil 1800.9 \rceil = 1801$.
+  \item \textbf{Prediction-set construction (\texttt{prediction\_\allowbreak{}sets\_\allowbreak{}aps} and \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}raps}):} For a test input $x$, the boolean prediction set $\widehat{\mathcal{C}}(x) \subseteq \{0, \dots, 9\}$ includes all classes whose score does not exceed $\hat{q}$ plus a numerical tolerance of $10^{-12}$:
+  \begin{align}
+    \label{eq:pred_sets}
+    \widehat{\mathcal{C}}_{\text{APS}}(x) &= \bigl\{ y \in \{0, \dots, 9\} : C_{r(x, y)}(x) \le \hat{q} + 10^{-12} \bigr\}, \\
+    \widehat{\mathcal{C}}_{\text{RAPS}}(x) &= \bigl\{ y \in \{0, \dots, 9\} : C_{r(x, y)}(x) + \lambda \max(r(x, y) - k_{\text{reg}}, 0) \le \hat{q} + 10^{-12} \bigr\}.
+  \end{align}
+\end{itemize}
+
+\begin{lstlisting}[caption={Core conformal quantile and deterministic APS/RAPS prediction-set construction in Section~10.}]
+def conformal_quantile(scores: np.ndarray, alpha: float) -> float:
+    scores = np.asarray(scores, dtype=np.float64)
+    if scores.ndim != 1 or len(scores) == 0:
+        raise ValueError("Conformal scores must be a non-empty 1D array.")
+    if not np.isfinite(scores).all():
+        raise FloatingPointError("Non-finite calibration scores.")
+    n = len(scores)
+    k = int(math.ceil((n + 1) * (1.0 - alpha)))
+    k = min(max(k, 1), n)
+    ordered = np.sort(scores, kind="mergesort")
+    return float(ordered[k - 1])
+
+def prediction_sets_aps(probs: np.ndarray, q: float) -> np.ndarray:
+    _, cumulative, _ = sorted_probabilities(probs)
+    included_sorted = cumulative <= (q + 1e-12)
+    order = np.argsort(-probs, axis=1, kind="stable")
+    sets = np.zeros_like(probs, dtype=bool)
+    sets[np.arange(len(probs))[:, None], order] = included_sorted
+    return sets
+\end{lstlisting}
+
+\section{Processing and Experiment Execution Procedure}
+\label{sec:procedure}
+
+\subsection{Experiment Matrix Construction}
+In Section~12, \texttt{build\_\allowbreak{}experiment\_\allowbreak{}specs(seed)} constructs a list of 149 \texttt{ExperimentSpec} dataclass instances for each seed $s \in \{13, 42, 123, 456, 765\}$. Multiplying 149 specifications by the 3 conformal methods (\texttt{APS}, \texttt{TS+APS}, \texttt{RAPS}) yields 447 runs per seed and $447 \times 5 = 2{,}235$ total runs in \texttt{experiment\_\allowbreak{}manifest.csv}. Table~\ref{tab:exp_matrix} summarizes the experimental groups generated per seed.
+
+\begin{table}[!htbp]
+\centering
+\caption{Breakdown of the 149 \texttt{ExperimentSpec} instances generated per calibration seed by \texttt{build\_\allowbreak{}experiment\_\allowbreak{}specs(seed)}.}
+\label{tab:exp_matrix}
+\footnotesize\begin{tabularx}{\textwidth}{l l l Y r r r}
+\toprule
+\textbf{Group} & \textbf{Cal.\ Split} & \textbf{Test Split} & \textbf{Prompt Conditions} & \textbf{Grid} & \textbf{Specs/Seed} & \textbf{Total Runs} \\
+\midrule
+\texttt{E1} & \texttt{clean} ($5\text{k}$) & \texttt{clean} ($10\text{k}$) & \texttt{P0}, \texttt{ensemble} (2) & $1$ (\texttt{none}, 0) & $2$ & $30$ \\
+\texttt{E5} & \texttt{clean} ($5\text{k}$) & \texttt{clean} ($10\text{k}$) & \texttt{P1}, \texttt{P2}, \texttt{P3} (3) & $1$ (\texttt{none}, 0) & $3$ & $45$ \\
+\texttt{E2-E4} & \texttt{clean} ($5\text{k}$) & \texttt{corrupted} ($5\text{k}$) & \texttt{P0}, \texttt{ensemble} (2) & $6 \times 3 = 18$ & $36$ & $540$ \\
+\texttt{E6} & \texttt{clean} ($5\text{k}$) & \texttt{corrupted} ($5\text{k}$) & \texttt{P1}, \texttt{P2}, \texttt{P3} (3) & $6 \times 3 = 18$ & $54$ & $810$ \\
+\texttt{E7} & \texttt{matched\_\allowbreak{}shift} ($2\text{k}$) & \texttt{corrupted} ($5\text{k}$) & \texttt{P0} (1) & $6 \times 3 = 18$ & $18$ & $270$ \\
+\texttt{E8} & \texttt{matched\_\allowbreak{}shift} ($2\text{k}$) & \texttt{corrupted} ($5\text{k}$) & \texttt{P1}, \texttt{ensemble} (2) & $6 \times 3 = 18$ & $36$ & $540$ \\
+\midrule
+\textbf{Total} & & & & & \textbf{149} & \textbf{2,235} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Resumable Execution Loop}
+In Section~14, \texttt{run\_\allowbreak{}all\_\allowbreak{}experiments()} first calls \texttt{load\_\allowbreak{}checkpoint()} to read \texttt{results\_\allowbreak{}checkpoint.csv} if it exists, validating that all 24 columns in \texttt{RESULT\_\allowbreak{}COLUMNS} are present, non-null, and free of duplicate keys \texttt{(method, seed, calibration\_\allowbreak{}condition, prompt\_\allowbreak{}condition, visual\_\allowbreak{}condition, corruption, severity)}. It then iterates over each seed $s \in \text{\texttt{CALIBRATION\_\allowbreak{}SEEDS}}$, calls \texttt{set\_\allowbreak{}global\_\allowbreak{}seed(s)}, iterates through \texttt{build\_\allowbreak{}experiment\_\allowbreak{}specs(s)} and \texttt{METHODS}, skips any key already in \texttt{done}, and otherwise executes \texttt{run\_\allowbreak{}single\_\allowbreak{}experiment(spec, method, s)} followed immediately by \texttt{append\_\allowbreak{}checkpoint\_\allowbreak{}row(row)}. After all 2,235 keys are completed, the checkpoint table is sorted deterministically (\texttt{kind="stable"}) and written to \texttt{results/\allowbreak{}results.csv}.
+
+\section{Configuration and Parameter Handling}
+\label{sec:config}
+
+Section~2 defines all protocol constants at module level and serializes a subset of them to \texttt{metadata/\allowbreak{}config.json}. Table~\ref{tab:config} documents the configuration constants, their values, and their operational effects.
+
+{\small\begin{longtable}{P{0.31\textwidth} P{0.20\textwidth} P{0.42\textwidth}}
+\caption{Configuration constants defined in Section~2 and Section~4.}
+\label{tab:config} \\
+\toprule
+\textbf{Constant Name} & \textbf{Value} & \textbf{Operational Effect} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape Continued from previous page} \\
+\toprule
+\textbf{Constant Name} & \textbf{Value} & \textbf{Operational Effect} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\small\itshape Continued on next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+\texttt{PRIMARY\_\allowbreak{}SEED} & \texttt{42} & Initial global RNG seed and base seed for bootstrap CI generation. \\
+\texttt{CALIBRATION\_\allowbreak{}SEEDS} & \texttt{[13, 42, 123, 456, 765]} & Seeds controlling clean calibration splits and matched-shift splits. \\
+\texttt{ALPHA} & \texttt{0.10} & Nominal miscoverage rate $\alpha$ passed to \texttt{conformal\_\allowbreak{}quantile}. \\
+\texttt{TARGET\_\allowbreak{}COVERAGE} & \texttt{0.90} & Nominal coverage $1 - \alpha$ used in \texttt{coverage\_\allowbreak{}gap} and plot reference lines. \\
+\texttt{CALIBRATION\_\allowbreak{}SIZE} & \texttt{5000} & Total sample count ($500$/class) for clean calibration splits. \\
+\texttt{SHIFT\_\allowbreak{}TEST\_\allowbreak{}SIZE} & \texttt{5000} & Total sample count ($500$/class) for the fixed shifted test subset. \\
+\texttt{MATCHED\_\allowbreak{}CALIBRATION\_\allowbreak{}SIZE} & \texttt{2000} & Total sample count ($200$/class) for matched-shift calibration splits. \\
+\texttt{MATCHED\_\allowbreak{}SHIFT\_\allowbreak{}TEST\_\allowbreak{}SIZE} & \texttt{5000} & Total sample count ($500$/class) for matched-shift evaluation splits. \\
+\texttt{SHIFT\_\allowbreak{}SUBSET\_\allowbreak{}SEED} & \texttt{20270317} & RNG seed used to draw \texttt{shift\_\allowbreak{}test\_\allowbreak{}indices}. \\
+\texttt{MATCHED\_\allowbreak{}BASE\_\allowbreak{}SEED} & \texttt{914159} & Base seed combined with each calibration seed via \texttt{stable\_\allowbreak{}condition\_\allowbreak{}seed}. \\
+\texttt{MODEL\_\allowbreak{}NAME} & \texttt{"ViT-B/\allowbreak{}32"} & Key in \texttt{CLIP\_\allowbreak{}MODEL\_\allowbreak{}REGISTRY} selecting the CLIP backbone. \\
+\texttt{NUM\_\allowbreak{}CLASSES} & \texttt{10} & Number of CIFAR-10 classes; used for stratification and matrix shape assertions. \\
+\texttt{PROMPT\_\allowbreak{}ENSEMBLE} & \texttt{"ensemble\_\allowbreak{}mean\_\allowbreak{}logits"} & Identifier triggering arithmetic-mean logit ensembling across all 4 prompts. \\
+\texttt{SEVERITIES} & \texttt{[1, 3, 5]} & CIFAR-10-C severity levels evaluated in the experiment matrix. \\
+\texttt{METHODS} & \texttt{["APS", "TS+APS", "RAPS"]} & Conformal methods evaluated for each \texttt{ExperimentSpec}. \\
+\texttt{RAPS\_\allowbreak{}K\_\allowbreak{}REG} & \texttt{5} & Rank threshold $k_{\text{reg}}$ beyond which RAPS applies a linear penalty. \\
+\texttt{RAPS\_\allowbreak{}LAMBDA} & \texttt{0.01} & Regularization weight $\lambda$ per rank step above \texttt{RAPS\_\allowbreak{}K\_\allowbreak{}REG}. \\
+\texttt{ECE\_\allowbreak{}BINS} & \texttt{15} & Number of equal-width confidence bins in $[0, 1]$ for ECE calculation. \\
+\texttt{TEMPERATURE\_\allowbreak{}MIN}, \texttt{MAX} & \texttt{0.05}, \texttt{20.0} & Lower and upper bounds on fitted scalar temperature $T(w)$. \\
+\texttt{TEMPERATURE\_\allowbreak{}MAX\_\allowbreak{}ITER} & \texttt{50} & Maximum L-BFGS iterations in \texttt{fit\_\allowbreak{}temperature}. \\
+\texttt{TEMPERATURE\_\allowbreak{}TOL} & \texttt{1e-8} & Gradient and parameter-change tolerance for L-BFGS in \texttt{fit\_\allowbreak{}temperature}. \\
+\texttt{USE\_\allowbreak{}GOOGLE\_\allowbreak{}DRIVE} & \texttt{True} & Selects \texttt{DRIVE\_\allowbreak{}ROOT} (mounts Google Drive) vs.\ \texttt{LOCAL\_\allowbreak{}ROOT}. \\
+\texttt{AUTO\_\allowbreak{}DOWNLOAD\_\allowbreak{}MISSING} & \texttt{True} & Enables automatic network downloads for missing datasets and weights. \\
+\texttt{VERIFY\_\allowbreak{}CIFAR10C\_\allowbreak{}MD5} & \texttt{True} & Enables MD5 verification of \texttt{CIFAR-10-C.tar}. \\
+\texttt{VERIFY\_\allowbreak{}CIFAR10C\_\allowbreak{}SHA256} & \texttt{True} & Enables SHA-256 verification of \texttt{CIFAR-10-C.tar}. \\
+\texttt{INITIAL\_\allowbreak{}BATCH\_\allowbreak{}SIZE} & \texttt{128} (CUDA) / \texttt{32} (CPU) & Starting DataLoader batch size for \texttt{encode\_\allowbreak{}image\_\allowbreak{}embeddings}. \\
+\texttt{MIN\_\allowbreak{}BATCH\_\allowbreak{}SIZE} & \texttt{8} & Minimum batch size floor during CUDA OOM backoff. \\
+\texttt{NUM\_\allowbreak{}WORKERS} & \texttt{0} & DataLoader worker process count (main-process loading). \\
+\end{longtable}}
+
+\section{Evaluation, Aggregation, and Postprocessing Implementation}
+\label{sec:evaluation}
+
+\subsection{Per-Condition Evaluation Metrics}
+In Section~11, \texttt{evaluate\_\allowbreak{}predictions(probs, pred\_\allowbreak{}sets, labels)} validates that \texttt{probs} is a finite, row-normalized $(N, 10)$ float64 matrix and that \texttt{pred\_\allowbreak{}sets} is an $(N, 10)$ boolean matrix $\widehat{C} \in \{0, 1\}^{N \times 10}$, where $\widehat{C}_{i, j} = \mathbb{I}[j \in \widehat{\mathcal{C}}(x_i)]$. Let $y_i \in \{0, \dots, 9\}$ be the true label, $\hat{y}_i = \arg\max_{j} \hat{\pi}_{i, j}$ the top-1 predicted class, $\hat{p}_i = \max_{j} \hat{\pi}_{i, j}$ the top-1 confidence, and $|\widehat{\mathcal{C}}_i| = \sum_{j=0}^{9} \widehat{C}_{i, j}$ the prediction-set cardinality for sample $i \in \{1, \dots, N\}$. The function computes nine scalar metrics:
+\begin{align}
+  \text{\texttt{accuracy}} &= \frac{1}{N} \sum_{i=1}^{N} \mathbb{I}[\hat{y}_i = y_i], \\
+  \text{\texttt{coverage}} &= \frac{1}{N} \sum_{i=1}^{N} \widehat{C}_{i, y_i}, \\
+  \text{\texttt{coverage\_\allowbreak{}gap}} &= \bigl|\text{\texttt{coverage}} - (1 - \alpha)\bigr|, \\
+  \text{\texttt{average\_\allowbreak{}set\_\allowbreak{}size}} &= \frac{1}{N} \sum_{i=1}^{N} |\widehat{\mathcal{C}}_i|, \\
+  \text{\texttt{singleton\_\allowbreak{}rate}} &= \frac{1}{N} \sum_{i=1}^{N} \mathbb{I}\bigl[|\widehat{\mathcal{C}}_i| = 1\bigr], \\
+  \text{\texttt{empty\_\allowbreak{}set\_\allowbreak{}rate}} &= \frac{1}{N} \sum_{i=1}^{N} \mathbb{I}\bigl[|\widehat{\mathcal{C}}_i| = 0\bigr], \\
+  \text{\texttt{NLL}} &= -\frac{1}{N} \sum_{i=1}^{N} \log\bigl(\max(\hat{\pi}_{i, y_i}, 10^{-12})\bigr), \\
+  \text{\texttt{entropy}} &= -\frac{1}{N} \sum_{i=1}^{N} \sum_{j=0}^{9} \hat{\pi}_{i, j} \log\bigl(\max(\hat{\pi}_{i, j}, 10^{-12})\bigr).
+\end{align}
+For Expected Calibration Error (\texttt{expected\_\allowbreak{}calibration\_\allowbreak{}error}), the interval $[0, 1]$ is partitioned into $B = 15$ equal-width bins $I_b = [e_{b-1}, e_b)$ for $b \in \{1, \dots, 14\}$ and $I_{15} = [e_{14}, e_{15}]$ where $e_b = b / B$:
+\begin{equation}
+  \label{eq:ece}
+  \text{\texttt{ECE}} = \sum_{b=1}^{B} \frac{|B_b|}{N} \left| \frac{1}{|B_b|} \sum_{i \in B_b} \mathbb{I}[\hat{y}_i = y_i] - \frac{1}{|B_b|} \sum_{i \in B_b} \hat{p}_i \right|, \quad B_b = \{i : \hat{p}_i \in I_b\}.
+\end{equation}
+
+\subsection{Selective Top-1 Risk-Coverage Curves}
+In \texttt{risk\_\allowbreak{}coverage\_\allowbreak{}curve(probs, labels, n\_\allowbreak{}points=101)}, samples are sorted in descending order of top-1 confidence $\hat{p}_i$ using a stable sort. For each fraction $\gamma \in \text{\texttt{np.linspace(0.01, 1.0, 101)}}$, the function retains the top $k = \max(1, \lceil \gamma N \rceil)$ most confident samples and records the realized selection coverage $k / N$ and selective top-1 classification risk:
+\begin{equation}
+  \label{eq:risk_cov}
+  \text{risk}(k) = 1 - \frac{1}{k} \sum_{m=1}^{k} \mathbb{I}[\hat{y}_{(m)} = y_{(m)}].
+\end{equation}
+
+\subsection{Seed-Level Statistical Aggregation}
+In Section~15, \texttt{aggregate\_\allowbreak{}results(results)} groups \texttt{results\_\allowbreak{}df} by the 10 condition-identifying columns (\texttt{method}, \texttt{calibration\_\allowbreak{}condition}, \texttt{prompt\_\allowbreak{}condition}, \texttt{visual\_\allowbreak{}condition}, \texttt{corruption}, \texttt{severity}, \texttt{test\_\allowbreak{}size}, \texttt{calibration\_\allowbreak{}size}, \texttt{alpha}, \texttt{target\_\allowbreak{}coverage}), yielding $2{,}235 / 5 = 447$ groups of 5 seeds each. After verifying that each group contains no duplicate seed values, it computes seven summary statistics for each of the 9 metrics in \texttt{metric\_\allowbreak{}cols}:
+\begin{itemize}
+  \item \texttt{<metric>\_\allowbreak{}mean}: sample mean across the $m = 5$ seeds.
+  \item \texttt{<metric>\_\allowbreak{}std}: sample standard deviation with Bessel's correction (\texttt{ddof=1}).
+  \item \texttt{<metric>\_\allowbreak{}median}, \texttt{<metric>\_\allowbreak{}min}, \texttt{<metric>\_\allowbreak{}max}: median, minimum, and maximum across the 5 seeds.
+  \item \texttt{<metric>\_\allowbreak{}ci95\_\allowbreak{}low} and \texttt{<metric>\_\allowbreak{}ci95\_\allowbreak{}high}: 2.5th and 97.5th percentiles of $4{,}000$ bootstrap means computed by \texttt{bootstrap\_\allowbreak{}seed\_\allowbreak{}ci(values, ci\_\allowbreak{}seed, n\_\allowbreak{}boot=4000)}, where \texttt{ci\_\allowbreak{}seed} is derived deterministically from \texttt{(PRIMARY\_\allowbreak{}SEED, "bootstrap\_\allowbreak{}ci", *keys, metric)} via \texttt{\_\allowbreak{}bootstrap\_\allowbreak{}condition\_\allowbreak{}seed}.
+\end{itemize}
+
+\section{Output Generation and File Handling}
+\label{sec:outputs}
+
+Sections~16, 17, 19, 20, and 21 generate all persistent tables, plots, documentation files, and archives:
+\begin{itemize}
+  \item \textbf{Figures (Section~16 / Cell~32):} All figures are rendered at 300~DPI (\texttt{bbox\_\allowbreak{}inches="tight"}) into \texttt{results/\allowbreak{}figures/\allowbreak{}}:
+  \begin{enumerate}
+    \item \texttt{figure\_\allowbreak{}1\_\allowbreak{}coverage\_\allowbreak{}vs\_\allowbreak{}severity.png}: Line plot of mean empirical coverage vs.\ severity $s \in \{1, 3, 5\}$ averaged over the six corruptions for \texttt{APS}, \texttt{TS+APS}, and \texttt{RAPS} under clean calibration and \texttt{P0\_\allowbreak{}canonical}.
+    \item \texttt{figure\_\allowbreak{}2\_\allowbreak{}set\_\allowbreak{}size\_\allowbreak{}vs\_\allowbreak{}severity.png}: Line plot of mean prediction-set size vs.\ severity $s \in \{1, 3, 5\}$ for the same slice.
+    \item \texttt{figure\_\allowbreak{}3\_\allowbreak{}coverage\_\allowbreak{}shift\_\allowbreak{}conditions.png}: Bar chart comparing mean \texttt{APS} coverage across four condition groups (\texttt{same prompt /\allowbreak{} clean}, \texttt{prompt shift /\allowbreak{} clean}, \texttt{visual shift /\allowbreak{} same prompt} at severity~3, and \texttt{combined shift} at severity~3).
+    \item \texttt{figure\_\allowbreak{}4\_\allowbreak{}risk\_\allowbreak{}coverage.png}: Selective top-1 risk-coverage curves for seed~13 across \texttt{APS}, \texttt{TS+APS}, and \texttt{RAPS} on clean test data (\texttt{P0\_\allowbreak{}canonical}) and on \texttt{motion\_\allowbreak{}blur} severity~5 (\texttt{P1\_\allowbreak{}paraphrase}).
+    \item \texttt{figure\_\allowbreak{}5\_\allowbreak{}coverage\_\allowbreak{}gap\_\allowbreak{}heatmap.png}: Viridis heatmap of mean absolute coverage gap across the $6 \times 3$ corruption-by-severity grid for \texttt{APS} under clean calibration and \texttt{P0\_\allowbreak{}canonical}.
+    \item \texttt{figure\_\allowbreak{}6\_\allowbreak{}clean\_\allowbreak{}vs\_\allowbreak{}matched\_\allowbreak{}shift.png}: Grouped bar chart comparing clean calibration vs.\ matched-shift calibration across all six corruptions at severity~3 for \texttt{APS} and \texttt{P0\_\allowbreak{}canonical}.
+  \end{enumerate}
+  \item \textbf{Programmatic Tables (Section~17 / Cell~34):} Filters \texttt{aggregate\_\allowbreak{}df} to create \texttt{main\_\allowbreak{}comparison\_\allowbreak{}table.csv} (57 rows covering clean \texttt{P0}, corrupted severity-5 \texttt{P1} under clean calibration, and corrupted severity-5 \texttt{P0} and \texttt{P1} under matched-shift calibration across all three methods), renders matching \texttt{.html} and \texttt{.png} versions, and exports \texttt{ablation\_\allowbreak{}summary\_\allowbreak{}APS.csv}.
+  \item \textbf{Packaging (Section~21 / Cell~42):} Copies all generated CSVs, PNGs, HTML tables, split \texttt{.npz} files, metadata JSONs, and Markdown files into \texttt{final\_\allowbreak{}artifacts/\allowbreak{}}, computes file sizes and SHA-256 checksums into \texttt{final\_\allowbreak{}artifacts/\allowbreak{}artifact\_\allowbreak{}manifest.csv}, compresses the directory into \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}final\_\allowbreak{}artifacts.zip}, and triggers browser downloads when running inside Google Colab.
+\end{itemize}
+
+\section{Error Handling, Reproducibility, and Execution Considerations}
+\label{sec:reproducibility}
+
+\subsection{Randomness Control and Determinism}
+The function \texttt{set\_\allowbreak{}global\_\allowbreak{}seed(seed)} seeds \texttt{random}, \texttt{numpy.random}, \texttt{torch.manual\_\allowbreak{}seed}, and \texttt{torch.cuda.manual\_\allowbreak{}seed\_\allowbreak{}all}, enables \texttt{torch.use\_\allowbreak{}deterministic\_\allowbreak{}algorithms(True, warn\_\allowbreak{}only=True)}, and sets \texttt{torch.backends.cudnn.deterministic = True} and \texttt{benchmark = False}. All split-construction and bootstrap routines instantiate isolated \texttt{np.random.default\_\allowbreak{}rng} generators seeded with explicit integer constants rather than relying on global NumPy RNG state. Furthermore, all array sorting operations that may encounter ties (\texttt{conformal\_\allowbreak{}quantile}, \texttt{sorted\_\allowbreak{}probabilities}, \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}aps}, \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}raps}, \texttt{risk\_\allowbreak{}coverage\_\allowbreak{}curve}, and DataFrame \texttt{sort\_\allowbreak{}values}) specify \texttt{kind="mergesort"} or \texttt{kind="stable"}.
+
+\subsection{Exception Handling and Forensic Auditing}
+Rather than silently ignoring corrupted caches or failed downloads, the code validates shapes, dtypes, norms, sample IDs, label arrays, and file hashes before reuse. If a cached \texttt{.npz} or \texttt{.json} file fails validation, the code issues a \texttt{warnings.warn} diagnostic and recomputes the artifact. If a dataset archive or model checkpoint fails MD5/SHA-256 verification, it unlinks the invalid file and raises a \texttt{RuntimeError}. In Section~18, \texttt{run\_\allowbreak{}forensic\_\allowbreak{}audit(results\_\allowbreak{}df)} programmatically verifies seven invariants before packaging:
+\begin{enumerate}
+  \item Prompt condition names match \texttt{set(PROMPTS.keys()) | \{PROMPT\_ENSEMBLE\}}.
+  \item Clean calibration (train partition) and clean test (test partition) are disjoint by dataset partition.
+  \item Every seed's matched-shift calibration and test index arrays have zero intersection (\texttt{overlap == []}).
+  \item Sample logits have shape \texttt{(128, 10)} and resulting probabilities pass \texttt{finite\_\allowbreak{}and\_\allowbreak{}normalized\_\allowbreak{}probabilities}.
+  \item \texttt{results\_\allowbreak{}df} contains all 2,235 manifest rows with zero duplicate keys and zero \texttt{NaN} entries.
+  \item Nominal \texttt{alpha} ($0.10$), \texttt{target\_\allowbreak{}coverage} ($0.90$), method names, and calibration sizes ($5{,}000$ or $2{,}000$) match protocol constants across all rows.
+  \item Core cache files (\texttt{text\_\allowbreak{}features.npz} and \texttt{clean\_\allowbreak{}test\_\allowbreak{}all.npz}) exist on disk.
+\end{enumerate}
+
+\section{Implementation Limitations}
+\label{sec:limitations}
+
+The following limitations follow directly from the supplied source code:
+\begin{enumerate}
+  \item \textbf{Empty prediction sets under deterministic APS/RAPS:} Because \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}aps} and \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}raps} test \texttt{cumulative <= (q + 1e-12)} without randomized tie-breaking or forced top-1 inclusion, any test sample whose top-1 probability $\pi_{(1)}(x)$ exceeds $\hat{q} + 10^{-12}$ receives an empty prediction set ($\widehat{\mathcal{C}}(x) = \emptyset$).
+  \item \textbf{Single-model and fixed-dataset scope:} \texttt{CLIP\_\allowbreak{}MODEL\_\allowbreak{}REGISTRY} contains only \texttt{"ViT-B/\allowbreak{}32"}, and dataset loaders are hardcoded to 10-class CIFAR-10 and $(50000, 32, 32, 3)$ CIFAR-10-C arrays.
+  \item \textbf{Redundant clean calibration state files:} \texttt{calibration\_\allowbreak{}state\_\allowbreak{}path} includes \texttt{corruption} and \texttt{severity} in the JSON filename even when \texttt{calibration\_\allowbreak{}condition == "clean"}, producing 19 identical JSON files per \texttt{(seed, prompt\_\allowbreak{}condition, method)} tuple.
+  \item \textbf{Unaggregated columns in \texttt{aggregate\_\allowbreak{}results}:} \texttt{empty\_\allowbreak{}set\_\allowbreak{}rate} and \texttt{conformal\_\allowbreak{}quantile} are saved in \texttt{results.csv} but are not included in \texttt{metric\_\allowbreak{}cols} inside \texttt{aggregate\_\allowbreak{}results}.
+  \item \textbf{Colab and external network assumptions:} Initial execution when caches are absent requires outbound HTTPS access to Zenodo (2.92~GB), OpenAI Azure CDN (338~MB), and the torchvision CIFAR-10 mirror.
+\end{enumerate}
+
+\section{Summary of the Implementation}
+\label{sec:summary}
+
+The reviewed project implements a complete, self-verifying pipeline for evaluating zero-shot CLIP \texttt{ViT-B/\allowbreak{}32} conformal prediction sets under prompt and visual distribution shifts. By decoupling image encoding from prompt-specific logit computation and persisting intermediate splits, embeddings, logits, calibration states, and incremental result rows, the architecture avoids redundant neural network forward passes across prompt templates and supports interruption-tolerant execution. During the code audit, duplicate helper definitions were consolidated, a split-label slicing bug in the dead \texttt{save\_\allowbreak{}indices} definition was corrected, a shifted-test embedding/logit cache collision between clean-calibrated and matched-shift evaluations was resolved, a pre-filtering bug that excluded clean test conditions from Figure~3 was fixed, a Pillow \texttt{DeprecationWarning} was removed, and formatting was standardized across the script and notebook while preserving full behavioral and schema compatibility.
+
+\appendix
+
+\section{Function and Class Interface Reference}
+\label{app:interfaces}
+
+Table~\ref{tab:interfaces} documents the classes and functions in the reviewed codebase.
+
+{\small\begin{longtable}{P{0.30\textwidth} P{0.29\textwidth} P{0.34\textwidth}}
+\caption{Summary of classes and functions in \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.py}.}
+\label{tab:interfaces} \\
+\toprule
+\textbf{Name} & \textbf{Arguments / Signature} & \textbf{Return Value \& Role} \\
+\midrule
+\endfirsthead
+\multicolumn{3}{l}{\small\itshape Continued from previous page} \\
+\toprule
+\textbf{Name} & \textbf{Arguments / Signature} & \textbf{Return Value \& Role} \\
+\midrule
+\endhead
+\midrule
+\multicolumn{3}{r}{\small\itshape Continued on next page} \\
+\endfoot
+\bottomrule
+\endlastfoot
+\texttt{set\_\allowbreak{}global\_\allowbreak{}seed} & \texttt{(seed: int) -> None} & Seeds Python, NumPy, and PyTorch RNGs; enables deterministic algorithms. \\
+\texttt{environment\_\allowbreak{}metadata} & \texttt{() -> Dict[str, Any]} & Returns runtime software, hardware, and git revision dictionary. \\
+\texttt{sha256\_\allowbreak{}file}, \texttt{md5\_\allowbreak{}file} & \texttt{(path: Path, chunk\_\allowbreak{}size: int) -> str} & Stream file in 8~MiB chunks and return hex digest. \\
+\texttt{sanitize\_\allowbreak{}name} & \texttt{(value: str) -> str} & Normalizes string to alphanumeric, \texttt{-}, and \texttt{\_\allowbreak{}} characters. \\
+\texttt{atomic\_\allowbreak{}write\_\allowbreak{}json} & \texttt{(path: Path, payload: Mapping) -> None} & Writes JSON to \texttt{.tmp} file and renames atomically. \\
+\texttt{stable\_\allowbreak{}condition\_\allowbreak{}seed} & \texttt{(base\_\allowbreak{}seed: int, condition: int) -> int} & Deterministic bitwise XOR seed derivation for matched-shift splits. \\
+\texttt{\_\allowbreak{}bootstrap\_\allowbreak{}condition\_\allowbreak{}seed} & \texttt{(base\_\allowbreak{}seed: int, *parts: object) -> int} & Deterministic variadic SHA-256 seed derivation for bootstrap CIs. \\
+\texttt{stratified\_\allowbreak{}indices} & \texttt{(labels: Sequence[int], size: int, seed: int) -> np.ndarray} & Returns shuffled class-balanced \texttt{int64} index array of length \texttt{size}. \\
+\texttt{save\_\allowbreak{}indices} & \texttt{(path: Path, indices: np.ndarray, labels: np.ndarray, metadata: Mapping) -> None} & Saves \texttt{indices}, \texttt{labels[indices]}, and JSON \texttt{metadata} to \texttt{.npz}. \\
+\texttt{load\_\allowbreak{}valid\_\allowbreak{}indices} & \texttt{(path: Path, expected\_\allowbreak{}size: int, reference\_\allowbreak{}labels: Optional[np.ndarray]) -> Optional[np.ndarray]} & Validates and returns cached split indices, or \texttt{None} if invalid. \\
+\texttt{finite\_\allowbreak{}and\_\allowbreak{}normalized\_\allowbreak{}probabilities} & \texttt{(probs: np.ndarray, atol: float) -> None} & Asserts shape \texttt{(N, 10)}, finiteness, bounds in $[0, 1]$, and unit row sums. \\
+\texttt{cache\_\allowbreak{}npz\_\allowbreak{}valid} & \texttt{(path: Path, required\_\allowbreak{}arrays: Sequence[str]) -> bool} & Checks whether \texttt{path} is a valid \texttt{.npz} containing all required keys. \\
+\texttt{\_\allowbreak{}format\_\allowbreak{}bytes}, \texttt{\_\allowbreak{}format\_\allowbreak{}seconds} & \texttt{(num\_\allowbreak{}bytes) -> str}, \texttt{(seconds) -> str} & Human-readable byte and duration formatters for download logs. \\
+\texttt{download\_\allowbreak{}with\_\allowbreak{}progress} & \texttt{(url, destination, expected\_\allowbreak{}size, chunk\_\allowbreak{}size, max\_\allowbreak{}retries) -> Path} & Resumable HTTP downloader with \texttt{Range} support and \texttt{tqdm} bar. \\
+\texttt{\_\allowbreak{}load\_\allowbreak{}or\_\allowbreak{}download\_\allowbreak{}cifar10\_\allowbreak{}split}, \texttt{ensure\_\allowbreak{}cifar10} & \texttt{(train: bool) -> CIFAR10}, \texttt{() -> Tuple[CIFAR10, CIFAR10]} & Load and validate official CIFAR-10 train and test datasets. \\
+\texttt{\_\allowbreak{}verify\_\allowbreak{}cifar10c\_\allowbreak{}archive}, \texttt{ensure\_\allowbreak{}cifar10c\_\allowbreak{}archive} & \texttt{(path: Path) -> None}, \texttt{() -> Path} & Ensure \texttt{CIFAR-10-C.tar} exists and passes MD5/SHA-256 checks. \\
+\texttt{\_\allowbreak{}find\_\allowbreak{}tar\_\allowbreak{}member}, \texttt{\_\allowbreak{}valid\_\allowbreak{}extracted\_\allowbreak{}cifar10c\_\allowbreak{}file}, \texttt{\_\allowbreak{}all\_\allowbreak{}required\_\allowbreak{}cifar10c\_\allowbreak{}files\_\allowbreak{}present}, \texttt{extract\_\allowbreak{}selected\_\allowbreak{}cifar10c\_\allowbreak{}members} & Archive member lookup, validation, and selective extraction helpers & Return \texttt{Dict[str, Path]} mapping corruption names and \texttt{"labels"} to validated \texttt{.npy} paths. \\
+\texttt{CIFAR10CSubset} & \texttt{Dataset} subclass & Memmap-backed CIFAR-10-C dataset for a single corruption and severity. \\
+\texttt{verify\_\allowbreak{}cifar10c\_\allowbreak{}alignment} & \texttt{(extracted: Mapping[str, Path], clean\_\allowbreak{}test: CIFAR10) -> None} & Verifies label block equality and corruption array shapes/dtypes. \\
+\texttt{ensure\_\allowbreak{}clip\_\allowbreak{}weights} & \texttt{() -> Path} & Verifies or downloads \texttt{ViT-B-32.pt} and checks SHA-256. \\
+\texttt{build\_\allowbreak{}text\_\allowbreak{}features}, \texttt{load\_\allowbreak{}or\_\allowbreak{}build\_\allowbreak{}text\_\allowbreak{}features} & \texttt{() -> Dict[str, np.ndarray]} & Compute or load L2-normalized $(10, 512)$ text embeddings per prompt. \\
+\texttt{\_\allowbreak{}make\_\allowbreak{}loader}, \texttt{CleanCIFARSubset}, \texttt{encode\_\allowbreak{}image\_\allowbreak{}embeddings}, \texttt{get\_\allowbreak{}shift\_\allowbreak{}embeddings} & Image feature extraction and caching routines & Compute or load L2-normalized $(N, 512)$ CLIP image embeddings with CUDA OOM backoff. \\
+\texttt{logits\_\allowbreak{}from\_\allowbreak{}embeddings}, \texttt{logits\_\allowbreak{}cache\_\allowbreak{}path}, \texttt{logits\_\allowbreak{}cached} & Logit computation and caching routines & Compute and cache $(N, 10)$ scaled cosine-similarity or ensemble logits. \\
+\texttt{probability\_\allowbreak{}from\_\allowbreak{}logits} & \texttt{(logits: np.ndarray, temperature: float) -> np.ndarray} & Computes temperature-scaled softmax probabilities in \texttt{float64}. \\
+\texttt{\_\allowbreak{}inv\_\allowbreak{}sigmoid}, \texttt{fit\_\allowbreak{}temperature} & \texttt{(logits: np.ndarray, labels: np.ndarray) -> float} & Fits constrained scalar temperature $T \in [0.05, 20.0]$ via L-BFGS. \\
+\texttt{conformal\_\allowbreak{}quantile}, \texttt{sorted\_\allowbreak{}probabilities}, \texttt{aps\_\allowbreak{}calibration\_\allowbreak{}scores}, \texttt{raps\_\allowbreak{}calibration\_\allowbreak{}scores}, \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}aps}, \texttt{prediction\_\allowbreak{}sets\_\allowbreak{}raps}, \texttt{fit\_\allowbreak{}conformal\_\allowbreak{}state}, \texttt{build\_\allowbreak{}prediction\_\allowbreak{}sets} & Conformal scoring, quantile, and set-construction routines & Compute finite-sample quantile $\hat{q}$ and boolean prediction-set matrices for \texttt{APS}, \texttt{TS+APS}, and \texttt{RAPS}. \\
+\texttt{accuracy}, \texttt{coverage}, \texttt{expected\_\allowbreak{}calibration\_\allowbreak{}error}, \texttt{nll}, \texttt{entropy}, \texttt{evaluate\_\allowbreak{}predictions}, \texttt{risk\_\allowbreak{}coverage\_\allowbreak{}curve} & Evaluation metric routines & Compute per-run accuracy, coverage, set-size, calibration, and selective risk metrics. \\
+\texttt{ExperimentSpec}, \texttt{result\_\allowbreak{}key}, \texttt{build\_\allowbreak{}experiment\_\allowbreak{}specs} & Experiment matrix specification helpers & Materialize the 149 \texttt{ExperimentSpec} instances per seed. \\
+\texttt{calibration\_\allowbreak{}logits\_\allowbreak{}for}, \texttt{calibration\_\allowbreak{}state\_\allowbreak{}path}, \texttt{fit\_\allowbreak{}or\_\allowbreak{}load\_\allowbreak{}calibration\_\allowbreak{}state}, \texttt{load\_\allowbreak{}checkpoint}, \texttt{append\_\allowbreak{}checkpoint\_\allowbreak{}row}, \texttt{load\_\allowbreak{}or\_\allowbreak{}build\_\allowbreak{}test\_\allowbreak{}embeddings}, \texttt{run\_\allowbreak{}single\_\allowbreak{}experiment}, \texttt{run\_\allowbreak{}all\_\allowbreak{}experiments} & Experiment execution and checkpointing routines & Execute all 2,235 runs with per-row CSV checkpointing and calibration-state caching. \\
+\texttt{bootstrap\_\allowbreak{}seed\_\allowbreak{}ci}, \texttt{aggregate\_\allowbreak{}results} & Statistical aggregation routines & Aggregate metrics across the 5 calibration seeds with 4,000-sample percentile bootstrap CIs. \\
+\texttt{savefig}, \texttt{pretty\_\allowbreak{}corruption}, \texttt{compute\_\allowbreak{}risk\_\allowbreak{}coverage\_\allowbreak{}for\_\allowbreak{}condition} & Plotting helpers & Generate and save Figures~1--6 and \texttt{risk\_\allowbreak{}coverage.csv}. \\
+\texttt{run\_\allowbreak{}forensic\_\allowbreak{}audit} & \texttt{(results: pd.DataFrame) -> Dict[str, object]} & Verifies split disjointness, probability normalization, and result completeness. \\
+\end{longtable}}
+
+\section{Notebook-to-Script Cell Mapping}
+\label{app:mapping}
+
+Table~\ref{tab:cell_map} maps all 43 cells of \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.ipynb} to the sections of \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.py}.
+
+{\small\begin{longtable}{r l l P{0.64\textwidth}}
+\caption{Cell-by-cell mapping of \texttt{prompt\_\allowbreak{}shift\_\allowbreak{}conformal\_\allowbreak{}vlm\_\allowbreak{}persistent.ipynb}.}
+\label{tab:cell_map} \\
+\toprule
+\textbf{Cell} & \textbf{Type} & \textbf{ID} & \textbf{Section / Responsibility} \\
+\midrule
+\endfirsthead
+\toprule
+\textbf{Cell} & \textbf{Type} & \textbf{ID} & \textbf{Section / Responsibility} \\
+\midrule
+\endhead
+\bottomrule
+\endlastfoot
+0 & Code & \texttt{5c0a6ce5} & UTF-8 encoding declaration (\texttt{\# -*- coding: utf-8 -*-}). \\
+1 & Markdown & \texttt{f61a7d1d} & Title, scientific protocol overview, and Section~1 introduction. \\
+2 & Code & \texttt{820ebe53} & Section~1: \texttt{pip install} and import verification for \texttt{clip}, \texttt{ftfy}, \texttt{regex}, \texttt{tqdm}. \\
+3 & Markdown & \texttt{75669827} & Section~2 introduction (central configuration and reproducibility policy). \\
+4 & Code & \texttt{6e774fc6} & Section~2: Imports, protocol constants, Drive mount, directory setup, \texttt{set\_\allowbreak{}global\_\allowbreak{}seed}, \texttt{environment\_\allowbreak{}metadata}. \\
+5 & Markdown & \texttt{410211fa} & Section~3 introduction (utility functions and integrity checks). \\
+6 & Code & \texttt{11beba7b} & Section~3: Hashing, atomic JSON, seed derivation, stratified sampling, split I/O, probability/cache validation. \\
+7 & Markdown & \texttt{3fff875b} & Section~4 introduction (CIFAR-10 and CIFAR-10-C acquisition and splits). \\
+8 & Code & \texttt{38f5c151} & Section~4: Resumable downloader, archive verification/extraction, \texttt{CIFAR10CSubset}, alignment check, split generation. \\
+9 & Markdown & \texttt{102297cf} & Section~5 introduction (prompt definitions and frozen CLIP loading). \\
+10 & Code & \texttt{f502da1d} & Section~5: \texttt{ensure\_\allowbreak{}clip\_\allowbreak{}weights}, frozen CLIP loading, \texttt{build\_\allowbreak{}text\_\allowbreak{}features}, \texttt{TEXT\_\allowbreak{}FEATURES}. \\
+11 & Markdown & \texttt{d58b854f} & Section~6 introduction (image inference and embedding caches). \\
+12 & Code & \texttt{b7f2e62a} & Section~6: \texttt{encode\_\allowbreak{}image\_\allowbreak{}embeddings}, \texttt{CleanCIFARSubset}, clean test and calibration embedding extraction. \\
+13 & Markdown & \texttt{a63a5c00} & Section~7 introduction (CIFAR-10-C lazy loading and shift embedding cache). \\
+14 & Code & \texttt{771a82d4} & Section~7: \texttt{SHIFT\_\allowbreak{}EMBED\_\allowbreak{}ROOT} and \texttt{get\_\allowbreak{}shift\_\allowbreak{}embeddings}. \\
+15 & Markdown & \texttt{cd8cd5f0} & Section~8 introduction (zero-shot logits and prompt-ensemble construction). \\
+16 & Code & \texttt{92c4a6d7} & Section~8: \texttt{logits\_\allowbreak{}from\_\allowbreak{}embeddings}, \texttt{logits\_\allowbreak{}cached}, \texttt{probability\_\allowbreak{}from\_\allowbreak{}logits}. \\
+17 & Markdown & \texttt{273bb433} & Section~9 introduction (post-hoc scalar temperature scaling). \\
+18 & Code & \texttt{34c78323} & Section~9: \texttt{\_\allowbreak{}inv\_\allowbreak{}sigmoid} and \texttt{fit\_\allowbreak{}temperature} (L-BFGS optimizer). \\
+19 & Markdown & \texttt{e310fbeb} & Section~10 introduction (deterministic APS and RAPS). \\
+20 & Code & \texttt{b5e126cf} & Section~10: \texttt{conformal\_\allowbreak{}quantile}, \texttt{sorted\_\allowbreak{}probabilities}, APS/RAPS scores and prediction sets. \\
+21 & Markdown & \texttt{e1468320} & Section~11 introduction (evaluation metrics). \\
+22 & Code & \texttt{28f32dcc} & Section~11: \texttt{accuracy}, \texttt{coverage}, \texttt{expected\_\allowbreak{}calibration\_\allowbreak{}error}, \texttt{nll}, \texttt{entropy}, \texttt{evaluate\_\allowbreak{}predictions}, \texttt{risk\_\allowbreak{}coverage\_\allowbreak{}curve}. \\
+23 & Markdown & \texttt{29316ac1} & Section~12 introduction (experiment matrix E1--E8). \\
+24 & Code & \texttt{37dd244a} & Section~12: \texttt{ExperimentSpec}, \texttt{result\_\allowbreak{}key}, \texttt{build\_\allowbreak{}experiment\_\allowbreak{}specs}, \texttt{experiment\_\allowbreak{}manifest.csv}. \\
+25 & Markdown & \texttt{a3d5414e} & Section~13 introduction (lightweight end-to-end sanity experiment). \\
+26 & Code & \texttt{2e435b29} & Section~13: 128-calibration / 256-test sanity verification of \texttt{TS+APS}. \\
+27 & Markdown & \texttt{76372b23} & Section~14 introduction (calibration-state caching and resumable execution). \\
+28 & Code & \texttt{3090580f} & Section~14: \texttt{calibration\_\allowbreak{}logits\_\allowbreak{}for}, \texttt{fit\_\allowbreak{}or\_\allowbreak{}load\_\allowbreak{}calibration\_\allowbreak{}state}, checkpoint I/O, \texttt{run\_\allowbreak{}all\_\allowbreak{}experiments}. \\
+29 & Markdown & \texttt{800c1dae} & Section~15 introduction (statistical aggregation). \\
+30 & Code & \texttt{466c59f1} & Section~15: \texttt{bootstrap\_\allowbreak{}seed\_\allowbreak{}ci}, \texttt{aggregate\_\allowbreak{}results}, \texttt{results\_\allowbreak{}aggregated\_\allowbreak{}across\_\allowbreak{}seeds.csv}. \\
+31 & Markdown & \texttt{c7fd5e67} & Section~16 introduction (figure generation). \\
+32 & Code & \texttt{59d739cb} & Section~16: Generation of Figures~1--6 and \texttt{risk\_\allowbreak{}coverage.csv}. \\
+33 & Markdown & \texttt{00de748e} & Section~17 introduction (programmatic result tables). \\
+34 & Code & \texttt{eda74b9b} & Section~17: Generation of \texttt{main\_comparison\_table.\{csv,html,png\}} and \texttt{ablation\_\allowbreak{}summary\_\allowbreak{}APS.csv}. \\
+35 & Markdown & \texttt{21e1500e} & Section~18 introduction (forensic sanity and leakage checks). \\
+36 & Code & \texttt{6489eef8} & Section~18: \texttt{run\_\allowbreak{}forensic\_\allowbreak{}audit} and \texttt{metadata/\allowbreak{}forensic\_\allowbreak{}audit.json}. \\
+37 & Markdown & \texttt{272b8476} & Section~19 introduction (protocol, limitations, requirements, and README files). \\
+38 & Code & \texttt{a0b59cb9} & Section~19: Writes \texttt{README.md}, \texttt{EXPERIMENT\_\allowbreak{}PROTOCOL.md}, \texttt{LIMITATIONS.md}, \texttt{requirements.txt} under \texttt{ROOT}. \\
+39 & Markdown & \texttt{bb69633d} & Section~20 introduction (pipeline diagram). \\
+40 & Code & \texttt{727d8ddf} & Section~20: Draws and saves \texttt{assets/\allowbreak{}pipeline\_\allowbreak{}diagram.png}. \\
+41 & Markdown & \texttt{2cd29d2a} & Section~21 introduction (final artifact collection and Colab downloads). \\
+42 & Code & \texttt{7ab766d7} & Section~21: Writes \texttt{persistence\_\allowbreak{}status.json}, populates \texttt{final\_\allowbreak{}artifacts/\allowbreak{}}, writes \texttt{artifact\_\allowbreak{}manifest.csv}, builds ZIP archive. \\
+\end{longtable}}
+
+\section{Summary of Code Cleanup and Audit Findings}
+\label{app:changes}
+
+Table~\ref{tab:changes_summary} summarizes the substantive modifications recorded in \texttt{code\_\allowbreak{}changes.py}. None of these modifications alter experimental hyperparameters, random seeds, dataset splits, model weights, or metric definitions.
+
+\begin{table}[!htbp]
+\centering
+\caption{Summary of substantive code modifications recorded in \texttt{code\_\allowbreak{}changes.py}.}
+\label{tab:changes_summary}
+\small\begin{tabularx}{\textwidth}{P{0.22\textwidth} Y Y}
+\toprule
+\textbf{Location} & \textbf{Modification} & \textbf{Effect on Behavior} \\
+\midrule
+Header \& Cell~1 & Removed duplicate Colab header docstrings and stale chat-session disclaimer. & Documentation clarity only. \\
+Cells~2, 4, 8, 10, 42 & Removed unused imports (\texttt{os}, \texttt{copy}, \texttt{csv}, \texttt{asdict}, \texttt{Iterable}, \texttt{Subset}) and consolidated duplicate imports into Cell~4. & Eliminates redundant import statements; all symbols remain bound. \\
+Cells~6, 8, 30 & Consolidated duplicate helpers into Cell~6, fixed label slicing in \texttt{save\_\allowbreak{}indices}, and separated \texttt{stable\_\allowbreak{}condition\_\allowbreak{}seed} (XOR) from \texttt{\_\allowbreak{}bootstrap\_\allowbreak{}condition\_\allowbreak{}seed} (SHA-256). & Eliminates function shadowing and fixes Cell~6's dead \texttt{save\_\allowbreak{}indices} bug while preserving exact runtime seeds. \\
+Cell~8 (\texttt{CIFAR10CSubset}) & Removed deprecated \texttt{mode="RGB"} parameter from \texttt{Image.fromarray(image\_\allowbreak{}array)}. & Eliminates Pillow \texttt{DeprecationWarning}; RGB inference is identical for $(32, 32, 3)$ \texttt{uint8} arrays. \\
+Cell~22 (\texttt{evaluate\_\allowbreak{}predictions}) & Checked \texttt{pred\_\allowbreak{}sets.dtype != np.bool\_\allowbreak{}} directly and computed \texttt{coverage(pred\_\allowbreak{}sets, labels)} once per call. & Avoids redundant array indexing; identical metric values. \\
+Cell~28 (\texttt{load\_\allowbreak{}or\_\allowbreak{}build\_\allowbreak{}test\_\allowbreak{}embeddings}, \texttt{run\_\allowbreak{}single\_\allowbreak{}experiment}) & Used seed-specific cache tags (\texttt{matched\_\allowbreak{}test\_\allowbreak{}seed\_\allowbreak{}<seed>} and \texttt{matched\_\allowbreak{}<corr>\_\allowbreak{}s<sev>\_\allowbreak{}seed\_\allowbreak{}<seed>\_\allowbreak{}test}) for \texttt{matched\_\allowbreak{}shift} test sets. & Prevents cache-file thrashing between fixed \texttt{shift\_\allowbreak{}test} and seed-specific \texttt{matched\_\allowbreak{}shift} test sets; identical numerical outputs. \\
+Cell~32 (Figure~3 \texttt{base3}) & Included \texttt{visual\_\allowbreak{}condition == "clean"} rows in \texttt{base3} alongside severity-3 corrupted rows. & Populates all four condition groups defined in \texttt{np.select} for Figure~3. \\
+All Sections & Removed ornamental comment banners (\texttt{\# ===...===}), normalized ~35-column line wrapping to PEP~8 widths, and normalized non-ASCII punctuation. & Improves code readability and maintainability with zero runtime impact. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\end{document}
